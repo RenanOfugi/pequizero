@@ -1,0 +1,9 @@
+# services.local.conf — modelo. Copie para 'services.local.conf' e ajuste.
+# O pequizero também cria este arquivo na 1ª execução.
+
+# Caminho da pasta de projetos (workspace de scan).
+BASE_DIR="$HOME/projetos"
+
+# Variáveis usadas pelos jvm_args do services.conf, no formato NOME="valor".
+# Exemplo (referenciada como $MINHA_SENHA no services.conf):
+# MINHA_SENHA="troque-aqui"

@@ -1,0 +1,5 @@
+# Configurações locais (não versionar) — cada um tem as suas, só na sua máquina.
+# O pequizero cria ambas zeradas na 1ª execução. Modelos versionados:
+# services.local.conf.example.
+services.conf
+services.local.conf
