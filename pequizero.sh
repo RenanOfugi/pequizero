@@ -9,7 +9,9 @@
 set -uo pipefail
 
 SESSION="apis"
-TIMEOUT_SECONDS=300  # timeout aguardando o startup de cada serviço (5 min)
+# Timeout aguardando o startup de cada serviço; pode ser sobrescrito definindo
+# TIMEOUT_SECONDS=<segundos> no services.local.conf.
+TIMEOUT_SECONDS=300
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 CONF_FILE="$SCRIPT_DIR/services.conf"
@@ -51,6 +53,13 @@ clear_screen() {
   return 0
 }
 
+# Versão para as funções de seleção que rodam em $( ): stdout está capturado
+# (só o resultado pode ir nele), então o clear sai pelo stderr.
+clear_screen_err() {
+  [ -t 2 ] && clear >&2
+  return 0
+}
+
 pause() {
   [ -t 0 ] || return 0
   echo ""
@@ -69,9 +78,19 @@ Opções:
   -h, --help      Mostra esta ajuda.
   --reconfigure   Refaz a pergunta do caminho da pasta e regrava a escolha.
 
+Variáveis de ambiente:
+  CLEAN=1         Força 'mvn clean install' nos builds (recompila do zero).
+                  Use ao renomear/remover classes ou mudar contratos entre
+                  módulos. Padrão: build incremental (mais rápido).
+
 Arquivos:
   services.conf         Definição dos serviços.
-  services.local.conf   BASE_DIR e variáveis (criado na 1ª execução).
+  services.local.conf   BASE_DIR, TIMEOUT_SECONDS e variáveis dos jvm_args
+                        (criado na 1ª execução).
+
+Sessão existente:
+  Se a sessão tmux '$SESSION' já estiver aberta, dá para subir/reiniciar só os
+  serviços selecionados nela ([u]), recriar tudo ([r]) ou apenas anexar ([a]).
 EOF
 }
 
@@ -114,15 +133,17 @@ remember_workspace() {
 }
 
 # Navegador de pastas: número entra, '..' sobe, '.' seleciona, 'q' cancela.
+# A cada nível a tela é limpa; erros vão em $msg para sobreviver ao redesenho.
 browse_dir() {
   local cur="${1:-$PWD}"
   cur="$(cd "$cur" 2>/dev/null && pwd)" || cur="$HOME"
-  local subs sel i
+  local subs sel i msg=""
   while true; do
     subs=()
     while IFS= read -r d; do subs+=("$d"); done \
       < <(find "$cur" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%f\n' 2>/dev/null | sort)
 
+    clear_screen_err
     {
       echo ""
       echo "${C_CYAN}${C_BOLD}Navegando:${C_RESET} $cur"
@@ -135,20 +156,22 @@ browse_dir() {
           printf "  ${C_DIM}[%d]${C_RESET} %s/\n" "$((i+1))" "${subs[$i]}"
         done
       fi
+      [ -n "$msg" ] && echo "" && echo "  ${C_YELLOW}$msg${C_RESET}"
       echo ""
     } >&2
+    msg=""
 
     read -rp "  > " sel >&2
     case "$sel" in
       q|Q) return 1 ;;
       .)   echo "$cur"; return 0 ;;
       ..)  cur="$(cd "$cur/.." && pwd)" ;;
-      ''|*[!0-9]*) echo "  Opção inválida." >&2 ;;
+      ''|*[!0-9]*) msg="Opção inválida." ;;
       *)
         if [ "$sel" -ge 1 ] && [ "$sel" -le "${#subs[@]}" ]; then
           cur="$cur/${subs[$((sel-1))]}"
         else
-          echo "  Número fora da lista." >&2
+          msg="Número fora da lista."
         fi ;;
     esac
   done
@@ -158,10 +181,12 @@ browse_dir() {
 # (com autocompletar via Tab). Ecoa o caminho absoluto escolhido; retorna 1 se
 # cancelado.
 pick_dir() {
-  local suggested base i
+  local suggested base i first=1 msg=""
   suggested="$(dirname "$SCRIPT_DIR")"
 
   while true; do
+    # Não limpa na 1ª exibição para manter o cabeçalho de quem chamou.
+    if [ "$first" -eq 1 ]; then first=0; else clear_screen_err; fi
     {
       echo ""
       echo "Escolha a pasta para escanear:"
@@ -175,8 +200,10 @@ pick_dir() {
       echo "  ${C_DIM}[d]${C_RESET} digitar o caminho (Tab completa)"
       echo "  ${C_DIM}[q]${C_RESET} cancelar"
       echo "  ${C_DIM}(Enter usa: $suggested)${C_RESET}"
+      [ -n "$msg" ] && echo "" && echo "  ${C_YELLOW}$msg${C_RESET}"
       echo ""
     } >&2
+    msg=""
 
     local choice
     read -rp "  > " choice >&2
@@ -189,12 +216,12 @@ pick_dir() {
         read -erp "  Caminho: " base >&2   # -e: autocompletar com Tab
         base="${base/#\~/$HOME}"
         ;;
-      *[!0-9]*) echo "  Opção inválida." >&2; continue ;;
+      *[!0-9]*) msg="Opção inválida."; continue ;;
       *)
         if [ "$choice" -ge 1 ] && [ "$choice" -le "${#WORKSPACE_HISTORY[@]}" ]; then
           base="${WORKSPACE_HISTORY[$((choice-1))]}"
         else
-          echo "  Número fora da lista." >&2; continue
+          msg="Número fora da lista."; continue
         fi ;;
     esac
 
@@ -204,7 +231,7 @@ pick_dir() {
       echo "$(cd "$base" && pwd)"
       return 0
     fi
-    echo "  '$base' não existe. Tente de novo." >&2
+    msg="'$base' não existe. Tente de novo."
   done
 }
 
@@ -215,6 +242,9 @@ write_local_conf() {
   umask 077
   cat > "$LOCAL_CONF" <<EOF || die "falha ao gravar '$LOCAL_CONF'."
 BASE_DIR="$base"
+
+# Timeout (segundos) aguardando o startup de cada serviço. Padrão: 300.
+# TIMEOUT_SECONDS=300
 
 # Variáveis usadas pelos jvm_args do services.conf, no formato NOME="valor".
 EOF
@@ -327,11 +357,17 @@ load_local_conf() {
     die "BASE_DIR '$BASE_DIR' não existe. Edite '$LOCAL_CONF'."
   fi
 
-  # Nomes das variáveis definidas no conf (exceto BASE_DIR) que jvm_args usa.
+  if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
+    warn "TIMEOUT_SECONDS='$TIMEOUT_SECONDS' inválido em '$LOCAL_CONF' — usando 300."
+    TIMEOUT_SECONDS=300
+  fi
+
+  # Nomes das variáveis definidas no conf que jvm_args pode usar (exceto as
+  # de configuração do próprio script).
   LOCAL_VARS=()
   local name
   while IFS= read -r name; do
-    [ "$name" = "BASE_DIR" ] && continue
+    case "$name" in BASE_DIR|TIMEOUT_SECONDS|WORKSPACE_HISTORY) continue ;; esac
     LOCAL_VARS+=("$name")
   done < <(grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' "$LOCAL_CONF" \
              | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/')
@@ -396,8 +432,15 @@ build_command() {
   local mod="${S_MOD[$i]}" build="${S_BUILD[$i]}"
   local profile="${S_PROFILE[$i]}" jvm="${S_JVM[$i]}"
 
-  local install="mvn clean install -DskipTests"
-  [ -n "${build// /}" ] && install="mvn -pl ${build// /} clean install -DskipTests"
+  local goals="install"
+  [ -n "${CLEAN:-}" ] && goals="clean install"
+
+  local install="mvn $goals -DskipTests"
+  if [ -n "${build// /}" ]; then
+    install="mvn -pl ${build// /} -am $goals -DskipTests"
+  elif [ -n "${mod// /}" ]; then
+    install="mvn -pl ${mod// /} -am $goals -DskipTests"
+  fi
 
   local run="mvn"
   [ -n "${mod// /}" ] && run="$run -pl ${mod// /}"
@@ -474,7 +517,7 @@ scan_executable_modules() {
       if [ "$moddir" = "${d%/}" ]; then
         mod=""                       # módulo na raiz do projeto -> sem -pl
       else
-        mod="$(basename "$moddir")"
+        mod="${moddir#"${d%/}"/}"    # caminho relativo à raiz do projeto (vira o -pl)
       fi
 
       local projpath="${d%/}"
@@ -482,7 +525,9 @@ scan_executable_modules() {
       [ -n "${seen["$projpath/$mod"]:-}" ] && continue
       seen["$projpath/$mod"]=1
       SCAN_PATH+=("$projpath"); SCAN_PROJ+=("$proj"); SCAN_MOD+=("$mod")
-    done < <(find "$d" -maxdepth 2 -name pom.xml 2>/dev/null | sort)
+    done < <(find "$d" -maxdepth 4 \
+               \( -name target -o -name src -o -name node_modules -o -name '.*' \) -prune \
+               -o -name pom.xml -print 2>/dev/null | sort)
   done
 }
 
@@ -497,7 +542,7 @@ wait_for_startup() {
   local name="$1" elapsed=0 output
   echo "${C_DIM}Aguardando '$name' inicializar...${C_RESET}"
   while [ $elapsed -lt $TIMEOUT_SECONDS ]; do
-    output="$(tmux capture-pane -t "$SESSION:$name" -p -S - 2>/dev/null)"
+    output="$(tmux capture-pane -t "$SESSION:=$name" -p -S - 2>/dev/null)"
 
     if echo "$output" | grep -qE "(Started .+ in .+ seconds|Tomcat started on port|Application availability state .+ changed to ACCEPTING_TRAFFIC)"; then
       success "'${C_BOLD}$name${C_RESET}' iniciou com sucesso!"
@@ -514,6 +559,8 @@ wait_for_startup() {
   return 1
 }
 
+# Sobe um serviço: cria a sessão se ainda não existir; se já houver uma janela
+# com o mesmo nome (serviço rodando/parado), mata e recria — vale como restart.
 start_service() {
   local i="$1"
   local name="${S_NAME[$i]}"
@@ -528,8 +575,21 @@ start_service() {
   local env_flags=()
   mapfile -t env_flags < <(service_env_flags "$i")
 
-  tmux new-window -t "$SESSION" -n "$name" "${env_flags[@]}"
-  tmux send-keys -t "$SESSION:$name" "$cmd" C-m
+  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux new-session -d -s "$SESSION" -n "$name" "${env_flags[@]}" \
+      || die "falha ao criar a sessão tmux '$SESSION'."
+  else
+    # Se o serviço já tem janela, cria a nova ANTES de matar a antiga (matar
+    # primeiro derrubaria a sessão quando ela fosse a única janela).
+    local line old_id=""
+    while IFS= read -r line; do
+      if [ "${line#* }" = "$name" ]; then old_id="${line%% *}"; break; fi
+    done < <(tmux list-windows -t "$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null)
+    [ -n "$old_id" ] && echo "${C_DIM}Janela '$name' já existe — reiniciando o serviço.${C_RESET}"
+    tmux new-window -t "$SESSION" -n "$name" "${env_flags[@]}"
+    [ -n "$old_id" ] && tmux kill-window -t "$old_id" 2>/dev/null
+  fi
+  tmux send-keys -t "$SESSION:=$name" "$cmd" C-m
 
   if [ "${S_WAIT[$i]}" = "true" ]; then
     wait_for_startup "$name"
@@ -591,12 +651,16 @@ add_one_module() {
   echo ""
   echo "  Novo serviço — projeto '$proj', módulo '${mod:-(raiz)}'."
   echo "  Caminho: $path"
-  echo "  Defaults: build full (mvn install sem -pl), sem profile, wait=true."
+  echo "  Defaults: build incremental do módulo (-pl -am), sem profile, wait=true."
   echo "  Enter aceita o valor entre [colchetes]."
   echo ""
 
   local name
   read -rp "    nome no menu [$default_name]: " name; name="${name:-$default_name}"
+  if [[ "$name" == *'|'* ]]; then
+    echo "  O nome não pode conter '|' (separador do services.conf)."
+    return 0
+  fi
 
   local i
   for i in "${!S_NAME[@]}"; do
@@ -699,16 +763,42 @@ edit_one_service() {
   local i="$1"
   echo ""
   echo "  Serviço '${S_NAME[$i]}' (projeto: ${S_PROJ[$i]})"
-  echo "  Enter mantém o valor atual entre [colchetes]."
+  echo "  O valor atual já vem preenchido: edite, apague (deixa vazio) ou Enter mantém."
   echo ""
-  local mod build profile jvm wait
-  read -rp "    modulo        [${S_MOD[$i]}]: " mod;       mod="${mod:-${S_MOD[$i]}}"
-  read -rp "    build_modules [${S_BUILD[$i]}]: " build;   build="${build:-${S_BUILD[$i]}}"
-  read -rp "    profile       [${S_PROFILE[$i]}]: " profile; profile="${profile:-${S_PROFILE[$i]}}"
-  read -rp "    jvm_args      [${S_JVM[$i]}]: " jvm;        jvm="${jvm:-${S_JVM[$i]}}"
-  read -rp "    wait (true/false) [${S_WAIT[$i]}]: " wait;  wait="${wait:-${S_WAIT[$i]}}"
+  local name path mod build profile jvm wait
+  while true; do
+    read -erp "    nome          : " -i "${S_NAME[$i]}" name
+    if [ -z "$(trim "$name")" ]; then
+      echo "  O nome não pode ficar vazio."; continue
+    fi
+    local j dup=0
+    for j in "${!S_NAME[@]}"; do
+      [ "$j" -eq "$i" ] && continue
+      [ "${S_NAME[$j]}" = "$name" ] && { dup=1; break; }
+    done
+    [ "$dup" -eq 1 ] && { echo "  Já existe outro serviço chamado '$name'."; continue; }
+    break
+  done
+  read -erp "    path          : " -i "${S_PATH[$i]}" path
+  path="${path/#\~/$HOME}"
+  [ -d "$path" ] || warn "o caminho '$path' não existe hoje — o serviço será pulado ao subir."
+  read -erp "    modulo        : " -i "${S_MOD[$i]}" mod
+  read -erp "    build_modules : " -i "${S_BUILD[$i]}" build
+  read -erp "    profile       : " -i "${S_PROFILE[$i]}" profile
+  read -erp "    jvm_args      : " -i "${S_JVM[$i]}" jvm
+  while true; do
+    read -erp "    wait (true/false) : " -i "${S_WAIT[$i]}" wait
+    [[ "$wait" == "true" || "$wait" == "false" ]] && break
+    echo "  Valor inválido — use 'true' ou 'false'."
+  done
 
-  if [[ "$mod" == "${S_MOD[$i]}" && "$build" == "${S_BUILD[$i]}" \
+  if [[ "$name$path$mod$build$profile$jvm" == *'|'* ]]; then
+    echo "  Os campos não podem conter '|' (separador do services.conf). Nada gravado."
+    return 0
+  fi
+
+  if [[ "$name" == "${S_NAME[$i]}" && "$path" == "${S_PATH[$i]}" \
+     && "$mod" == "${S_MOD[$i]}" && "$build" == "${S_BUILD[$i]}" \
      && "$profile" == "${S_PROFILE[$i]}" && "$jvm" == "${S_JVM[$i]}" \
      && "$wait" == "${S_WAIT[$i]}" ]]; then
     echo "  (Nenhuma alteração — nada gravado.)"
@@ -722,6 +812,7 @@ edit_one_service() {
     return 0
   fi
 
+  S_NAME[$i]="$name"; S_PATH[$i]="$path"
   S_MOD[$i]="$mod"; S_BUILD[$i]="$build"; S_PROFILE[$i]="$profile"
   S_JVM[$i]="$jvm"; S_WAIT[$i]="$wait"
   save_services
@@ -761,11 +852,16 @@ handle_existing_session() {
   tmux has-session -t "$SESSION" 2>/dev/null || return 0
   echo ""
   echo "A sessão tmux '$SESSION' já existe."
+  echo "  ${C_DIM}[u]${C_RESET} Usar a sessão — sobe a seleção nela (reinicia janelas de mesmo nome)"
+  echo "  ${C_DIM}[r]${C_RESET} Recriar do zero (mata a sessão atual)"
+  echo "  ${C_DIM}[a]${C_RESET} Só anexar (descarta a seleção)"
+  echo "  ${C_DIM}[c]${C_RESET} Cancelar"
   local ans
-  read -rp "  [a] Anexar nela  [r] Recriar (mata a atual)  [c] Cancelar: " ans
+  read -rp "  > " ans
   case "${ans,,}" in
-    a) exec tmux attach -t "$SESSION" ;;
+    u) ;;
     r) tmux kill-session -t "$SESSION" 2>/dev/null ;;
+    a) exec tmux attach -t "$SESSION" ;;
     *) echo "Cancelado."; exit 0 ;;
   esac
 }
@@ -877,28 +973,14 @@ main() {
 
   handle_existing_session
 
-  # Cria a sessão com a 1ª janela já sendo o 1º serviço (sem janela ociosa).
-  local first="${EXEC_ORDER[0]}"
-  local first_dir="${S_PATH[$first]}"
   echo ""
   echo "${C_CYAN}${C_BOLD}Iniciando APIs...${C_RESET}"
-
-  local first_flags=()
-  mapfile -t first_flags < <(service_env_flags "$first")
-  tmux new-session -d -s "$SESSION" -n "${S_NAME[$first]}" "${first_flags[@]}" \
-    || die "falha ao criar a sessão tmux '$SESSION'."
-  if [ -d "$first_dir" ]; then
-    tmux send-keys -t "$SESSION:${S_NAME[$first]}" "$(build_command "$first")" C-m
-    if [ "${S_WAIT[$first]}" = "true" ]; then
-      wait_for_startup "${S_NAME[$first]}" || handle_service_failure "$first"
-    fi
-  else
-    warn "diretório '$first_dir' não existe — pulando '${S_NAME[$first]}'."
-  fi
-
-  for i in "${EXEC_ORDER[@]:1}"; do
+  for i in "${EXEC_ORDER[@]}"; do
     start_service "$i" || handle_service_failure "$i"
   done
+
+  tmux has-session -t "$SESSION" 2>/dev/null \
+    || die "nenhum serviço subiu (verifique os caminhos no services.conf)."
 
   echo ""
   success "${C_BOLD}APIs iniciadas!${C_RESET}"

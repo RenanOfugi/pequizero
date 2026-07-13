@@ -4,6 +4,9 @@
 # Caminho da pasta de projetos (workspace de scan).
 BASE_DIR="$HOME/projetos"
 
+# Timeout (segundos) aguardando o startup de cada serviço. Padrão: 300.
+# TIMEOUT_SECONDS=300
+
 # Variáveis usadas pelos jvm_args do services.conf, no formato NOME="valor".
 # Exemplo (referenciada como $MINHA_SENHA no services.conf):
 # MINHA_SENHA="troque-aqui"

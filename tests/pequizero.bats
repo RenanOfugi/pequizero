@@ -17,18 +17,30 @@ setup() {
 
 # --- build_command --------------------------------------------------------
 
-@test "build_command: build full quando build_modules vazio" {
+@test "build_command: build do módulo (-pl -am) quando build_modules vazio" {
   S_PATH=(/ws/p) S_PROJ=(p) S_MOD=(srv) S_BUILD=("") S_PROFILE=("") S_JVM=("")
   run build_command 0
   [[ "$output" == *'cd "/ws/p"'* ]]
-  [[ "$output" == *"mvn clean install -DskipTests"* ]]
+  [[ "$output" == *"mvn -pl srv -am install -DskipTests"* ]]
   [[ "$output" == *"mvn -pl srv spring-boot:run"* ]]
+}
+
+@test "build_command: build full quando modulo e build_modules vazios" {
+  S_PATH=(/ws/p) S_PROJ=(p) S_MOD=("") S_BUILD=("") S_PROFILE=("") S_JVM=("")
+  run build_command 0
+  [[ "$output" == *"mvn install -DskipTests"* ]]
 }
 
 @test "build_command: usa -pl no install quando build_modules definido" {
   S_PATH=(/ws/p) S_PROJ=(p) S_MOD=(a) S_BUILD=("core,security,a") S_PROFILE=("") S_JVM=("")
   run build_command 0
-  [[ "$output" == *"mvn -pl core,security,a clean install"* ]]
+  [[ "$output" == *"mvn -pl core,security,a -am install"* ]]
+}
+
+@test "build_command: CLEAN=1 força clean install" {
+  S_PATH=(/ws/p) S_PROJ=(p) S_MOD=("") S_BUILD=("") S_PROFILE=("") S_JVM=("")
+  CLEAN=1 run build_command 0
+  [[ "$output" == *"mvn clean install -DskipTests"* ]]
 }
 
 @test "build_command: adiciona profile quando definido" {
@@ -133,6 +145,83 @@ setup() {
   load_services 2>/dev/null
   remove_one_service 0 <<<'n' >/dev/null
   [ "${#S_NAME[@]}" -eq 1 ]
+}
+
+# --- edit_one_service -------------------------------------------------------
+# Sem tty o 'read -e -i' não pré-preenche: cada linha do heredoc é o valor
+# final do campo (linha vazia = campo limpo).
+
+@test "edit_one_service: renomeia, muda path e apaga profile/jvm_args" {
+  CONF_FILE="$BATS_TEST_TMPDIR/e.conf"
+  printf 'a|/ws/a|a|srv|core|local|-Dx=1|true\n' > "$CONF_FILE"
+  load_services 2>/dev/null
+  edit_one_service 0 >/dev/null 2>&1 <<'EOF'
+a-novo
+/ws/novo
+srv
+core
+
+
+false
+s
+EOF
+  [ "${S_NAME[0]}" = "a-novo" ]
+  [ "${S_PATH[0]}" = "/ws/novo" ]
+  [ -z "${S_PROFILE[0]}" ]
+  [ -z "${S_JVM[0]}" ]
+  [ "${S_WAIT[0]}" = "false" ]
+  grep -q '^a-novo|/ws/novo|a|srv|core|||false$' "$CONF_FILE"
+}
+
+@test "edit_one_service: rejeita nome duplicado e re-pergunta" {
+  CONF_FILE="$BATS_TEST_TMPDIR/e.conf"
+  printf 'a|/ws/a|a|m||||true\nb|/ws/b|b|m||||true\n' > "$CONF_FILE"
+  load_services 2>/dev/null
+  edit_one_service 0 >/dev/null 2>&1 <<'EOF'
+b
+a2
+/ws/a
+m
+
+
+x
+true
+s
+EOF
+  [ "${S_NAME[0]}" = "a2" ]
+  [ "${S_JVM[0]}" = "x" ]
+}
+
+@test "edit_one_service: campo com '|' não é gravado" {
+  CONF_FILE="$BATS_TEST_TMPDIR/e.conf"
+  printf 'a|/ws/a|a|m||local||true\n' > "$CONF_FILE"
+  load_services 2>/dev/null
+  edit_one_service 0 >/dev/null 2>&1 <<'EOF'
+a
+/ws/a
+m
+
+tem|pipe
+
+true
+EOF
+  [ "${S_PROFILE[0]}" = "local" ]
+}
+
+# --- scan_executable_modules ------------------------------------------------
+
+@test "scan: detecta módulo aninhado com -pl relativo" {
+  local ws="$BATS_TEST_TMPDIR/ws"
+  mkdir -p "$ws/proj/apps/web"
+  printf '<project><packaging>pom</packaging></project>\n' > "$ws/proj/pom.xml"
+  printf '<project><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>\n' \
+    > "$ws/proj/apps/web/pom.xml"
+  BASE_DIR="$ws"
+  S_NAME=() S_PATH=() S_MOD=()
+  scan_executable_modules
+  [ "${#SCAN_MOD[@]}" -eq 1 ]
+  [ "${SCAN_MOD[0]}" = "apps/web" ]
+  [ "${SCAN_PATH[0]}" = "$ws/proj" ]
 }
 
 # --- trim -----------------------------------------------------------------

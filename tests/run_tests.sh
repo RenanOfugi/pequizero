@@ -25,11 +25,15 @@ LOCAL_VARS=()
 S_PATH=(/ws/p) S_PROJ=(p) S_MOD=(srv) S_BUILD=("") S_PROFILE=("") S_JVM=("") S_WAIT=(true)
 out="$(build_command 0)"
 check "cd usa o caminho da API"        '[[ "$out" == *"cd \"/ws/p\""* ]]'
-check "install full sem build_modules" '[[ "$out" == *"mvn clean install -DskipTests"* ]]'
+check "install do módulo com -pl -am"  '[[ "$out" == *"mvn -pl srv -am install -DskipTests"* ]]'
 check "run com -pl do módulo"          '[[ "$out" == *"mvn -pl srv spring-boot:run"* ]]'
 
 S_BUILD=("core,a"); out="$(build_command 0)"
-check "install com -pl build_modules"  '[[ "$out" == *"mvn -pl core,a clean install"* ]]'
+check "install com -pl build_modules"  '[[ "$out" == *"mvn -pl core,a -am install"* ]]'
+
+S_BUILD=(""); S_MOD=(""); out="$(CLEAN=1 build_command 0)"
+check "CLEAN=1 força clean install"    '[[ "$out" == *"mvn clean install -DskipTests"* ]]'
+S_MOD=(srv)
 
 S_BUILD=(""); S_PROFILE=("local"); out="$(build_command 0)"
 check "adiciona profile"               '[[ "$out" == *"profiles=local"* ]]'
@@ -70,6 +74,59 @@ check "arrays alinhados após remover"   '[ "${S_PATH[*]}" = "/ws/a /ws/c" ]'
 check "conf regravado sem o removido"   '! grep -q "^b|" "$CONF_FILE"'
 remove_one_service 0 <<<'n' >/dev/null    # cancela
 check "cancelar (N) mantém"             '[ "${#S_NAME[@]}" -eq 2 ]'
+
+echo "edit_one_service (sem tty: cada linha é o valor final; vazia = limpa)"
+CONF_FILE="$TMP/e.conf"
+printf 'a|/ws/a|a|srv|core|local|-Dx=1|true\nb|/ws/b|b|m||||true\n' > "$CONF_FILE"
+load_services 2>/dev/null
+edit_one_service 0 >/dev/null 2>&1 <<'EOF'
+a-novo
+/ws/novo
+srv
+core
+
+
+false
+s
+EOF
+check "renomeia o serviço"              '[ "${S_NAME[0]}" = "a-novo" ]'
+check "muda o path"                     '[ "${S_PATH[0]}" = "/ws/novo" ]'
+check "apaga profile e jvm_args"        '[ -z "${S_PROFILE[0]}" ] && [ -z "${S_JVM[0]}" ]'
+check "conf regravado com os novos valores" 'grep -q "^a-novo|/ws/novo|a|srv|core|||false$" "$CONF_FILE"'
+edit_one_service 0 >/dev/null 2>&1 <<'EOF'
+b
+a2
+/ws/novo
+srv
+core
+
+
+false
+s
+EOF
+check "nome duplicado é rejeitado"      '[ "${S_NAME[0]}" = "a2" ]'
+edit_one_service 0 >/dev/null 2>&1 <<'EOF'
+a2
+/ws/novo
+srv
+core
+tem|pipe
+
+false
+EOF
+check "campo com '|' não é gravado"     '[ -z "${S_PROFILE[0]}" ]'
+
+echo "scan_executable_modules (módulo aninhado)"
+WS="$TMP/ws"
+mkdir -p "$WS/proj/apps/web"
+printf '<project><packaging>pom</packaging></project>\n' > "$WS/proj/pom.xml"
+printf '<project><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>\n' \
+  > "$WS/proj/apps/web/pom.xml"
+BASE_DIR="$WS"
+S_NAME=() S_PATH=() S_MOD=()
+scan_executable_modules
+check "detecta módulo aninhado"         '[ "${#SCAN_MOD[@]}" -eq 1 ] && [ "${SCAN_MOD[0]}" = "apps/web" ]'
+check "path é a raiz do projeto"        '[ "${SCAN_PATH[0]:-}" = "$WS/proj" ]'
 
 echo "trim"
 check "trim apara pontas"               '[ "$(trim "  a b  ")" = "a b" ]'
