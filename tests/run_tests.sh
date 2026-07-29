@@ -128,6 +128,56 @@ scan_executable_modules
 check "detecta módulo aninhado"         '[ "${#SCAN_MOD[@]}" -eq 1 ] && [ "${SCAN_MOD[0]}" = "apps/web" ]'
 check "path é a raiz do projeto"        '[ "${SCAN_PATH[0]:-}" = "$WS/proj" ]'
 
+echo "service_key (dedup normalizada)"
+check "barra final == sem barra"        '[ "$(service_key "/ws/a//" srv)" = "$(service_key /ws/a srv)" ]'
+check "módulo com barras/espaço iguala" '[ "$(service_key /ws/a "/apps/web/")" = "$(service_key /ws/a "apps/ web")" ]'
+check "módulo '.' == raiz (vazio)"      '[ "$(service_key /ws/a .)" = "$(service_key /ws/a "")" ]'
+mkdir -p "$TMP/sl/real"; ln -sfn "$TMP/sl/real" "$TMP/sl/link"
+check "symlink == caminho real"         '[ "$(service_key "$TMP/sl/link" srv)" = "$(service_key "$TMP/sl/real" srv)" ]'
+
+# Já cadastrado, mas escrito de outra forma: não deve reaparecer como novo.
+S_NAME=(web) S_PATH=("$WS/proj/") S_MOD=("apps/web/")
+scan_executable_modules
+check "cadastrado c/ barra final não reaparece" '[ "${#SCAN_MOD[@]}" -eq 0 ]'
+
+ln -sfn "$WS/proj" "$WS/proj-link"
+S_NAME=(web) S_PATH=("$WS/proj-link") S_MOD=("apps/web")
+scan_executable_modules
+check "cadastrado via symlink não reaparece"    '[ "${#SCAN_MOD[@]}" -eq 0 ]'
+rm -f "$WS/proj-link"
+
+echo "registro em lote ([A] do menu [N])"
+S_NAME=(web)
+check "nome livre é mantido"            '[ "$(S_NAME=(outro); unique_service_name web proj)" = "web" ]'
+check "colisão prefixa o projeto"       '[ "$(unique_service_name web proj)" = "proj-web" ]'
+check "colisão com pendente prefixa"    '[ "$(S_NAME=(); unique_service_name web proj web)" = "proj-web" ]'
+check "colisão dupla usa sufixo"        '[ "$(S_NAME=(web proj-web); unique_service_name web proj)" = "proj-web-2" ]'
+
+CONF_FILE="$TMP/b.conf"
+: > "$CONF_FILE"; load_services 2>/dev/null
+SCAN_PATH=(/ws/a /ws/b) SCAN_PROJ=(a b) SCAN_MOD=("srv" "")
+add_modules_bulk 0 1 <<<'s' >/dev/null
+check "registra todos os selecionados"  '[ "${#S_NAME[@]}" -eq 2 ]'
+check "nome vem do módulo"              '[ "${S_NAME[0]}" = "srv" ]'
+check "módulo na raiz usa o projeto"    '[ "${S_NAME[1]}" = "b" ]'
+check "defaults: wait=true, sem profile" '[ "${S_WAIT[0]}" = "true" ] && [ -z "${S_PROFILE[0]}" ]'
+check "conf gravado em 8 campos"        'grep -q "^srv|/ws/a|a|srv||||true$" "$CONF_FILE"'
+
+: > "$CONF_FILE"; load_services 2>/dev/null
+SCAN_PATH=(/ws/a /ws/b) SCAN_PROJ=(a b) SCAN_MOD=(web web)
+add_modules_bulk 0 1 <<<'s' >/dev/null
+check "desambigua módulos homônimos"    '[ "${S_NAME[0]}" = "web" ] && [ "${S_NAME[1]}" = "b-web" ]'
+
+: > "$CONF_FILE"; load_services 2>/dev/null
+SCAN_PATH=(/ws/a) SCAN_PROJ=(a) SCAN_MOD=(srv)
+add_modules_bulk 0 <<<'n' >/dev/null
+check "cancelar (n) não grava nada"     '[ "${#S_NAME[@]}" -eq 0 ] && [ ! -s "$CONF_FILE" ]'
+
+: > "$CONF_FILE"; load_services 2>/dev/null
+SCAN_PATH=(/ws/a /ws/b) SCAN_PROJ=(a b) SCAN_MOD=("we|b" srv)
+add_modules_bulk 0 1 <<<'s' >/dev/null 2>&1
+check "pula caminho com '|'"            '[ "${#S_NAME[@]}" -eq 1 ] && [ "${S_NAME[0]}" = "srv" ]'
+
 echo "trim"
 check "trim apara pontas"               '[ "$(trim "  a b  ")" = "a b" ]'
 

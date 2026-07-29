@@ -488,6 +488,33 @@ warn_undefined_vars() {
   done
 }
 
+# Colapsa barras repetidas e tira a barra final (preserva a raiz '/').
+squeeze_slashes() {
+  local p="$1"
+  while [[ "$p" == *//* ]]; do p="${p//\/\//\/}"; done
+  [ "${#p}" -gt 1 ] && p="${p%/}"
+  printf '%s' "$p"
+}
+
+# Chave canônica de um serviço (path + módulo), usada para detectar que um
+# módulo do workspace já está no services.conf. Normaliza para que a mesma
+# pasta escrita de formas diferentes — barra final, barras duplicadas, '~',
+# './', '..' ou symlink — produza a mesma chave.
+service_key() {
+  local path="$1" mod="$2" real
+  path="${path/#\~/$HOME}"
+  if [ -d "$path" ] && real="$(cd -P -- "$path" 2>/dev/null && pwd -P)"; then
+    path="$real"
+  fi
+  path="$(squeeze_slashes "$path")"
+
+  mod="$(squeeze_slashes "${mod// /}")"
+  mod="${mod#/}"
+  [ "$mod" = "." ] && mod=""
+
+  printf '%s/%s' "$path" "$mod"
+}
+
 # Escaneia BASE_DIR e preenche SCAN_PATH/SCAN_PROJ/SCAN_MOD com os módulos
 # executáveis (spring-boot-maven-plugin, packaging != pom) ainda não cadastrados.
 # SCAN_MOD vazio = módulo na raiz do projeto.
@@ -498,7 +525,7 @@ scan_executable_modules() {
   local i
   declare -A configured=()
   for i in "${!S_NAME[@]}"; do
-    configured["${S_PATH[$i]}/${S_MOD[$i]// /}"]=1
+    configured["$(service_key "${S_PATH[$i]}" "${S_MOD[$i]}")"]=1
   done
   declare -A seen=()
 
@@ -520,10 +547,11 @@ scan_executable_modules() {
         mod="${moddir#"${d%/}"/}"    # caminho relativo à raiz do projeto (vira o -pl)
       fi
 
-      local projpath="${d%/}"
-      [ -n "${configured["$projpath/$mod"]:-}" ] && continue
-      [ -n "${seen["$projpath/$mod"]:-}" ] && continue
-      seen["$projpath/$mod"]=1
+      local projpath="${d%/}" key
+      key="$(service_key "$projpath" "$mod")"
+      [ -n "${configured["$key"]:-}" ] && continue
+      [ -n "${seen["$key"]:-}" ] && continue
+      seen["$key"]=1
       SCAN_PATH+=("$projpath"); SCAN_PROJ+=("$proj"); SCAN_MOD+=("$mod")
     done < <(find "$d" -maxdepth 4 \
                \( -name target -o -name src -o -name node_modules -o -name '.*' \) -prune \
@@ -609,17 +637,18 @@ handle_service_failure() {
 }
 
 add_new_service() {
-  scan_executable_modules
-  if [ ${#SCAN_PROJ[@]} -eq 0 ]; then
-    echo ""
-    echo "  Nenhum módulo executável novo detectado em '$BASE_DIR'."
-    echo "  (Todos os módulos Spring Boot encontrados já estão no services.conf.)"
-    return 0
-  fi
-
   while true; do
+    # Reescaneia a cada volta: o que acabou de ser registrado sai da lista.
+    scan_executable_modules
+    if [ ${#SCAN_PROJ[@]} -eq 0 ]; then
+      echo ""
+      echo "  Nenhum módulo executável novo detectado em '$BASE_DIR'."
+      echo "  (Todos os módulos Spring Boot encontrados já estão no services.conf.)"
+      return 0
+    fi
+
     clear_screen
-    echo "  ${C_CYAN}${C_BOLD}--- Adicionar novo serviço (módulos detectados) ---${C_RESET}"
+    echo "  ${C_CYAN}${C_BOLD}--- Adicionar serviços (módulos detectados no workspace) ---${C_RESET}"
     local k label
     for k in "${!SCAN_PROJ[@]}"; do
       if [ -n "${SCAN_MOD[$k]}" ]; then
@@ -627,20 +656,120 @@ add_new_service() {
       else
         label="${SCAN_PROJ[$k]}  ▸ (raiz)"
       fi
-      printf "    [%d] %s\n" "$((k+1))" "$label"
+      printf "    ${C_DIM}[%d]${C_RESET} %s\n" "$((k+1))" "$label"
     done
-    echo "    [0] Voltar"
+    echo "    ${C_DIM}[A]${C_RESET} Registrar TODAS as ${#SCAN_PROJ[@]} APIs do workspace"
+    echo "    ${C_DIM}[0]${C_RESET} Voltar"
+    echo ""
+    echo "  ${C_DIM}Um número registra com nome à escolha; vários números ou [A]${C_RESET}"
+    echo "  ${C_DIM}registram em lote com os nomes sugeridos.${C_RESET}"
     echo ""
     local sel
     read -rp "  Adicionar qual módulo? " sel
     [[ "$sel" == "0" || -z "$sel" ]] && return 0
-    if ! [[ "$sel" =~ ^[0-9]+$ ]] || [ "$sel" -lt 1 ] || [ "$sel" -gt "${#SCAN_PROJ[@]}" ]; then
+
+    if [[ "${sel^^}" == "A" ]]; then
+      local all=()
+      for k in "${!SCAN_PROJ[@]}"; do all+=("$k"); done
+      add_modules_bulk "${all[@]}"
+      pause; continue
+    fi
+
+    # Aceita um número (fluxo com nome interativo) ou vários (lote).
+    local idxs=() seen=" " num idx invalid=0
+    for num in $sel; do
+      if ! [[ "$num" =~ ^[0-9]+$ ]] || [ "$num" -lt 1 ] || [ "$num" -gt "${#SCAN_PROJ[@]}" ]; then
+        echo "  Ignorando '$num' — fora da lista."; invalid=1; continue
+      fi
+      idx=$((num-1))
+      [[ "$seen" == *" $idx "* ]] && continue
+      idxs+=("$idx"); seen+="$idx "
+    done
+    if [ "${#idxs[@]}" -eq 0 ]; then
       echo "  Opção inválida."; pause; continue
     fi
-    local idx=$((sel-1))
-    add_one_module "$idx"
+    [ "$invalid" -eq 1 ] && pause
+
+    if [ "${#idxs[@]}" -eq 1 ]; then
+      add_one_module "${idxs[0]}"
+    else
+      add_modules_bulk "${idxs[@]}"
+    fi
     pause
   done
+}
+
+# 0 (sucesso) se o nome já está em uso — por um serviço cadastrado ou por um
+# dos nomes ainda não gravados passados em $2...
+name_taken() {
+  local name="$1"; shift
+  local n
+  for n in "${S_NAME[@]:-}"; do [ "$n" = "$name" ] && return 0; done
+  for n in "$@"; do [ "$n" = "$name" ] && return 0; done
+  return 1
+}
+
+# Nome livre para um serviço no registro em lote: parte de $1 (o módulo, ou o
+# projeto quando o módulo é a raiz); se colidir, prefixa com o projeto ($2) e,
+# em último caso, acrescenta um sufixo numérico. $3... = nomes desta rodada.
+unique_service_name() {
+  local base="$1" proj="$2"; shift 2
+  local cand="$base" n=2
+  if ! name_taken "$cand" "$@"; then printf '%s' "$cand"; return 0; fi
+  cand="$proj-$base"
+  while name_taken "$cand" "$@"; do
+    cand="$proj-$base-$n"; n=$((n+1))
+  done
+  printf '%s' "$cand"
+}
+
+# Registra vários módulos detectados de uma vez, sem perguntar nome por módulo:
+# mostra a lista com os nomes já resolvidos e grava tudo após uma confirmação.
+add_modules_bulk() {
+  local idxs=("$@") k path proj mod name
+  local names=() paths=() projs=() mods=()
+
+  for k in "${idxs[@]}"; do
+    path="${SCAN_PATH[$k]}"; proj="${SCAN_PROJ[$k]}"; mod="${SCAN_MOD[$k]}"
+    # '|' é o separador do services.conf: caminho assim não é representável.
+    if [[ "$path$proj$mod" == *'|'* ]]; then
+      warn "'$proj ▸ ${mod:-raiz}' tem '|' no caminho — pulando (registre à mão)."
+      continue
+    fi
+    name="$(unique_service_name "${mod:-$proj}" "$proj" "${names[@]:-}")"
+    names+=("$name"); paths+=("$path"); projs+=("$proj"); mods+=("$mod")
+  done
+
+  if [ "${#names[@]}" -eq 0 ]; then
+    echo "  Nenhum módulo registrável na seleção."
+    return 0
+  fi
+
+  clear_screen
+  echo "  ${C_CYAN}${C_BOLD}--- Registrar ${#names[@]} API(s) de uma vez ---${C_RESET}"
+  echo "  ${C_DIM}Defaults de cada serviço: build incremental do módulo (-pl -am),${C_RESET}"
+  echo "  ${C_DIM}sem profile, wait=true. Nome repetido ganha o projeto como prefixo.${C_RESET}"
+  echo "  ${C_DIM}Ajuste nome/profile/jvm_args depois pelo [E].${C_RESET}"
+  echo ""
+  local i
+  for i in "${!names[@]}"; do
+    printf "    ${C_BOLD}%s${C_RESET}  ${C_DIM}(%s ▸ %s)${C_RESET}\n" \
+      "${names[$i]}" "${projs[$i]}" "${mods[$i]:-raiz}"
+  done
+  echo ""
+  local confirm
+  read -rp "  Registrar essas ${#names[@]} API(s) no services.conf? (S/n): " confirm
+  if [[ "${confirm^^}" == "N" ]]; then
+    echo "  Cancelado — nada gravado."
+    return 0
+  fi
+
+  for i in "${!names[@]}"; do
+    S_NAME+=("${names[$i]}"); S_PATH+=("${paths[$i]}"); S_PROJ+=("${projs[$i]}")
+    S_MOD+=("${mods[$i]}"); S_BUILD+=(""); S_PROFILE+=(""); S_JVM+=(""); S_WAIT+=("true")
+  done
+  save_services
+  success "${C_BOLD}${#names[@]}${C_RESET} serviço(s) adicionado(s) ao services.conf."
 }
 
 add_one_module() {
@@ -781,6 +910,7 @@ edit_one_service() {
   done
   read -erp "    path          : " -i "${S_PATH[$i]}" path
   path="${path/#\~/$HOME}"
+  path="$(squeeze_slashes "$path")"
   [ -d "$path" ] || warn "o caminho '$path' não existe hoje — o serviço será pulado ao subir."
   read -erp "    modulo        : " -i "${S_MOD[$i]}" mod
   read -erp "    build_modules : " -i "${S_BUILD[$i]}" build
@@ -885,13 +1015,14 @@ print_menu() {
   fi
   echo ""
   echo "  ${C_DIM}[A]${C_RESET} Todas na ordem padrão (Enter)"
-  echo "  ${C_DIM}[N]${C_RESET} Adicionar novo serviço (módulos detectados)"
+  echo "  ${C_DIM}[N]${C_RESET} Adicionar serviços (um, vários ou todos os detectados)"
   echo "  ${C_DIM}[E]${C_RESET} Editar serviços"
   echo "  ${C_DIM}[R]${C_RESET} Remover serviço"
   echo "  ${C_DIM}[W]${C_RESET} Trocar workspace p/ escanear outra pasta"
   if [ "$SCAN_COUNT" -gt 0 ]; then
     echo ""
-    echo "  ${C_CYAN}ℹ $SCAN_COUNT módulo(s) Spring Boot detectado(s) ainda não cadastrado(s) — use [N].${C_RESET}"
+    echo "  ${C_CYAN}ℹ $SCAN_COUNT módulo(s) Spring Boot detectado(s) ainda não cadastrado(s) —${C_RESET}"
+    echo "  ${C_CYAN}  use [N] para registrar (lá dentro, [A] registra todos de uma vez).${C_RESET}"
   fi
   echo ""
   echo "  A ordem dos números define a ordem de execução."

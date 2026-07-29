@@ -224,6 +224,145 @@ EOF
   [ "${SCAN_PATH[0]}" = "$ws/proj" ]
 }
 
+@test "service_key: barra final e barras duplicadas dão a mesma chave" {
+  run service_key "/ws/a//" "srv"
+  local a="$output"
+  run service_key "/ws/a" "srv"
+  [ "$output" = "$a" ]
+}
+
+@test "service_key: módulo com barra sobrando ou espaço normaliza igual" {
+  run service_key "/ws/a" "/apps/web/"
+  local a="$output"
+  run service_key "/ws/a" "apps/ web"
+  [ "$output" = "$a" ]
+}
+
+@test "service_key: módulo raiz como '.' equivale a vazio" {
+  run service_key "/ws/a" "."
+  local a="$output"
+  run service_key "/ws/a" ""
+  [ "$output" = "$a" ]
+}
+
+@test "service_key: symlink e caminho real dão a mesma chave" {
+  local ws="$BATS_TEST_TMPDIR/sl"
+  mkdir -p "$ws/real"
+  ln -s "$ws/real" "$ws/link"
+  run service_key "$ws/link" "srv"
+  local a="$output"
+  run service_key "$ws/real" "srv"
+  [ "$output" = "$a" ]
+}
+
+@test "scan: cadastrado com barra final não reaparece como novo" {
+  local ws="$BATS_TEST_TMPDIR/ws2"
+  mkdir -p "$ws/proj/apps/web"
+  printf '<project><packaging>pom</packaging></project>\n' > "$ws/proj/pom.xml"
+  printf '<project><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>\n' \
+    > "$ws/proj/apps/web/pom.xml"
+  BASE_DIR="$ws"
+  S_NAME=(web) S_PATH=("$ws/proj/") S_MOD=("apps/web/")
+  scan_executable_modules
+  [ "${#SCAN_MOD[@]}" -eq 0 ]
+}
+
+@test "scan: cadastrado via symlink não reaparece como novo" {
+  local ws="$BATS_TEST_TMPDIR/ws3"
+  mkdir -p "$ws/proj/apps/web"
+  printf '<project><packaging>pom</packaging></project>\n' > "$ws/proj/pom.xml"
+  printf '<project><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>\n' \
+    > "$ws/proj/apps/web/pom.xml"
+  ln -s "$ws/proj" "$ws/proj-link"
+  BASE_DIR="$ws"
+  S_NAME=(web) S_PATH=("$ws/proj-link") S_MOD=("apps/web")
+  scan_executable_modules
+  [ "${#SCAN_MOD[@]}" -eq 0 ]
+}
+
+# --- registro em lote ([A] do menu [N]) -------------------------------------
+
+@test "unique_service_name: mantém o nome quando está livre" {
+  S_NAME=(outro)
+  run unique_service_name "web" "proj"
+  [ "$output" = "web" ]
+}
+
+@test "unique_service_name: colidindo com cadastrado, prefixa o projeto" {
+  S_NAME=(web)
+  run unique_service_name "web" "proj"
+  [ "$output" = "proj-web" ]
+}
+
+@test "unique_service_name: colidindo com nome pendente, prefixa o projeto" {
+  S_NAME=()
+  run unique_service_name "web" "proj" "web" "api"
+  [ "$output" = "proj-web" ]
+}
+
+@test "unique_service_name: colisão dupla vira sufixo numérico" {
+  S_NAME=(web proj-web)
+  run unique_service_name "web" "proj"
+  [ "$output" = "proj-web-2" ]
+}
+
+@test "add_modules_bulk: registra todos os detectados com os defaults" {
+  CONF_FILE="$BATS_TEST_TMPDIR/b.conf"
+  : > "$CONF_FILE"
+  load_services 2>/dev/null
+  SCAN_PATH=(/ws/a /ws/b) SCAN_PROJ=(a b) SCAN_MOD=("srv" "")
+  add_modules_bulk 0 1 <<<'s' >/dev/null
+
+  [ "${#S_NAME[@]}" -eq 2 ]
+  [ "${S_NAME[0]}" = "srv" ]        # nome do módulo
+  [ "${S_NAME[1]}" = "b" ]          # módulo na raiz -> nome do projeto
+  [ "${S_WAIT[0]}" = "true" ]
+  [ -z "${S_PROFILE[0]}" ]
+  grep -q '^srv|/ws/a|a|srv||||true$' "$CONF_FILE"
+  grep -q '^b|/ws/b|b|||||true$' "$CONF_FILE"
+}
+
+@test "add_modules_bulk: desambigua módulos de mesmo nome em projetos diferentes" {
+  CONF_FILE="$BATS_TEST_TMPDIR/b.conf"
+  : > "$CONF_FILE"
+  load_services 2>/dev/null
+  SCAN_PATH=(/ws/a /ws/b) SCAN_PROJ=(a b) SCAN_MOD=(web web)
+  add_modules_bulk 0 1 <<<'s' >/dev/null
+  [ "${S_NAME[0]}" = "web" ]
+  [ "${S_NAME[1]}" = "b-web" ]
+}
+
+@test "add_modules_bulk: não colide com serviço já cadastrado" {
+  CONF_FILE="$BATS_TEST_TMPDIR/b.conf"
+  printf 'web|/ws/x|x|web||||true\n' > "$CONF_FILE"
+  load_services 2>/dev/null
+  SCAN_PATH=(/ws/a) SCAN_PROJ=(a) SCAN_MOD=(web)
+  add_modules_bulk 0 <<<'s' >/dev/null
+  [ "${#S_NAME[@]}" -eq 2 ]
+  [ "${S_NAME[1]}" = "a-web" ]
+}
+
+@test "add_modules_bulk: cancelar (n) não grava nada" {
+  CONF_FILE="$BATS_TEST_TMPDIR/b.conf"
+  : > "$CONF_FILE"
+  load_services 2>/dev/null
+  SCAN_PATH=(/ws/a) SCAN_PROJ=(a) SCAN_MOD=(srv)
+  add_modules_bulk 0 <<<'n' >/dev/null
+  [ "${#S_NAME[@]}" -eq 0 ]
+  run grep -c . "$CONF_FILE"
+  [ "$output" -eq 0 ]
+}
+
+@test "add_modules_bulk: pula módulo com '|' no caminho (quebraria o conf)" {
+  CONF_FILE="$BATS_TEST_TMPDIR/b.conf"
+  : > "$CONF_FILE"
+  load_services 2>/dev/null
+  SCAN_PATH=(/ws/a /ws/b) SCAN_PROJ=(a b) SCAN_MOD=('we|b' srv)
+  add_modules_bulk 0 1 <<<'s' >/dev/null 2>&1
+  [ "${#S_NAME[@]}" -eq 1 ]
+  [ "${S_NAME[0]}" = "srv" ]
+}
+
 # --- trim -----------------------------------------------------------------
 
 @test "trim: remove espaços nas pontas, preserva no meio" {

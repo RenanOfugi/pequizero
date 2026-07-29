@@ -44,7 +44,7 @@ de cor):
 ```
 [1..n]  os serviços cadastrados — digite os números na ordem em que quer subir
 [A]     todas na ordem padrão (ou só Enter)
-[N]     adicionar novo serviço (módulos detectados no workspace)
+[N]     adicionar serviços — um, vários ou todos os detectados no workspace
 [E]     editar serviços
 [R]     remover serviço
 [W]     trocar o workspace (escanear outra pasta)
@@ -95,7 +95,7 @@ defina no `services.local.conf`:
 TIMEOUT_SECONDS=600
 ```
 
-## Adicionar um serviço — `[N]`
+## Adicionar serviços — `[N]`
 
 O script **escaneia automaticamente** os módulos Spring Boot executáveis do
 workspace atual (módulos com `spring-boot-maven-plugin` e packaging diferente de
@@ -106,11 +106,42 @@ detectados que ainda **não** estão cadastrados, agrupados por projeto:
 [1] projetoA-api  ▸ categoria-api
 [2] projetoB-api  ▸ teste-api
 [3] projetoC-api  ▸ apps/web
+[A] Registrar TODAS as 3 APIs do workspace
+[0] Voltar
 ```
 
-Você escolhe um, dá um nome (ou aceita o sugerido) e ele é gravado no
-`services.conf` com os padrões: build incremental do módulo, sem profile,
-`wait=true`. Depois ajuste `profile`/`jvm_args` pelo `[E]` se precisar.
+- **um número** — registra aquele módulo e pergunta o nome do menu (o sugerido
+  vem entre `[colchetes]`);
+- **vários números** (ex.: `1 3`) — registra em lote, com os nomes sugeridos;
+- **`[A]`** — registra de uma vez **todas** as APIs detectadas no workspace.
+
+Em qualquer caso o serviço é gravado no `services.conf` com os padrões: build
+incremental do módulo, sem profile, `wait=true`. Depois ajuste
+`profile`/`jvm_args` pelo `[E]` se precisar.
+
+### Registrar todas de uma vez — `[A]`
+
+O lote não pergunta nada por módulo: ele mostra a lista com os nomes já
+resolvidos e pede **uma** confirmação antes de gravar.
+
+```
+--- Registrar 3 API(s) de uma vez ---
+
+  categoria-api  (projetoA-api ▸ categoria-api)
+  teste-api      (projetoB-api ▸ teste-api)
+  apps/web       (projetoC-api ▸ apps/web)
+
+Registrar essas 3 API(s) no services.conf? (S/n):
+```
+
+O nome sai do **módulo** (ou do **projeto**, quando o módulo é a raiz). Se ele
+colidir com um serviço já cadastrado ou com outro do mesmo lote, ganha o projeto
+como prefixo (`projetoB-api-teste-api`) e, se ainda colidir, um sufixo numérico. Renomeie
+depois pelo `[E]` — nada é sobrescrito.
+
+Como o default é `wait=true`, subir tudo com `[A]` no menu principal aguarda cada
+API terminar de inicializar antes da próxima. Para paralelizar, mude `wait` para
+`false` nas que não precisam segurar a fila.
 
 Para registrar APIs de **outra pasta**, troque o workspace com `[W]` (os
 serviços já cadastrados são preservados) e use o `[N]` de novo. Pela linha de
