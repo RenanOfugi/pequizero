@@ -819,7 +819,7 @@ edit_services() {
     echo "  ${C_CYAN}${C_BOLD}--- Editor de serviços (grava em services.conf) ---${C_RESET}"
     local i
     for i in "${!S_NAME[@]}"; do
-      printf "    [%d] %s\n" "$((i+1))" "${S_NAME[$i]}"
+      printf "    [%d] %s ${C_DIM}( %s )${C_RESET}\n" "$((i+1))" "${S_NAME[$i]}" "${S_PROJ[$i]}"
     done
     echo "    [0] Voltar"
     echo ""
@@ -846,7 +846,8 @@ remove_service() {
     fi
     local i
     for i in "${!S_NAME[@]}"; do
-      printf "    ${C_DIM}[%d]${C_RESET} %s\n" "$((i+1))" "${S_NAME[$i]}"
+      printf "    ${C_DIM}[%d]${C_RESET} %s ${C_DIM}( %s )${C_RESET}\n" \
+        "$((i+1))" "${S_NAME[$i]}" "${S_PROJ[$i]}"
     done
     echo "    ${C_DIM}[0]${C_RESET} Voltar"
     echo ""
@@ -1010,7 +1011,8 @@ print_menu() {
     echo "  ${C_DIM}(nenhuma cadastrada — use [N] para adicionar)${C_RESET}"
   else
     for i in "${!S_NAME[@]}"; do
-      printf "  ${C_DIM}[%d]${C_RESET} ${C_BOLD}%s${C_RESET}\n" "$((i+1))" "${S_NAME[$i]}"
+      printf "  ${C_DIM}[%d]${C_RESET} ${C_BOLD}%s${C_RESET} ${C_DIM}( %s )${C_RESET}\n" \
+        "$((i+1))" "${S_NAME[$i]}" "${S_PROJ[$i]}"
     done
   fi
   echo ""
