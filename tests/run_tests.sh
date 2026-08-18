@@ -25,14 +25,16 @@ LOCAL_VARS=()
 S_PATH=(/ws/p) S_PROJ=(p) S_MOD=(srv) S_BUILD=("") S_PROFILE=("") S_JVM=("") S_WAIT=(true)
 out="$(build_command 0)"
 check "cd usa o caminho da API"        '[[ "$out" == *"cd \"/ws/p\""* ]]'
-check "install do módulo com -pl -am"  '[[ "$out" == *"mvn -pl srv -am install -DskipTests"* ]]'
+check "clean install do módulo -pl -am" '[[ "$out" == *"mvn -pl srv -am clean install -DskipTests"* ]]'
 check "run com -pl do módulo"          '[[ "$out" == *"mvn -pl srv spring-boot:run"* ]]'
 
 S_BUILD=("core,a"); out="$(build_command 0)"
-check "install com -pl build_modules"  '[[ "$out" == *"mvn -pl core,a -am install"* ]]'
+check "clean install c/ build_modules" '[[ "$out" == *"mvn -pl core,a -am clean install"* ]]'
 
-S_BUILD=(""); S_MOD=(""); out="$(CLEAN=1 build_command 0)"
-check "CLEAN=1 força clean install"    '[[ "$out" == *"mvn clean install -DskipTests"* ]]'
+S_BUILD=(""); S_MOD=(""); out="$(build_command 0)"
+check "projeto todo: clean install"    '[[ "$out" == *"mvn clean install -DskipTests"* ]]'
+S_MOD=(srv); out="$(SKIP_CLEAN=1 build_command 0)"
+check "SKIP_CLEAN=1 pula o clean"      '[[ "$out" == *"mvn -pl srv -am install -DskipTests"* && "$out" != *clean* ]]'
 S_MOD=(srv)
 
 S_BUILD=(""); S_PROFILE=("local"); out="$(build_command 0)"
@@ -177,6 +179,49 @@ check "cancelar (n) não grava nada"     '[ "${#S_NAME[@]}" -eq 0 ] && [ ! -s "$
 SCAN_PATH=(/ws/a /ws/b) SCAN_PROJ=(a b) SCAN_MOD=("we|b" srv)
 add_modules_bulk 0 1 <<<'s' >/dev/null 2>&1
 check "pula caminho com '|'"            '[ "${#S_NAME[@]}" -eq 1 ] && [ "${S_NAME[0]}" = "srv" ]'
+
+echo "grupos (load/save + expand_selection)"
+CONF_FILE="$TMP/g.conf"
+printf 'a|/ws/a|a|m||||true\nb|/ws/b|b|m||||true\nc|/ws/c|c|m||||true\nd|/ws/d|d|m||||true\n' > "$CONF_FILE"
+load_services 2>/dev/null
+GROUPS_FILE="$TMP/groups.conf"
+
+G_NAME=(g1) G_ITEMS=("c|a|b"); save_groups
+check "save_groups grava nome|apis"     'grep -q "^g1|c|a|b$" "$GROUPS_FILE"'
+G_NAME=() G_ITEMS=(); load_groups 2>/dev/null
+check "load_groups relê o grupo"        '[ "${#G_NAME[@]}" -eq 1 ] && [ "${G_ITEMS[0]}" = "c|a|b" ]'
+
+printf 'espacos |  c | a  \n#comentario\n\nsem_pipe\nvazio|  |\n' > "$GROUPS_FILE"
+load_groups 2>/dev/null
+check "load_groups apara espaços"       '[ "${G_NAME[0]}" = "espacos" ] && [ "${G_ITEMS[0]}" = "c|a" ]'
+check "ignora linha sem '|' e vazia"    '[ "${#G_NAME[@]}" -eq 1 ]'
+
+G_NAME=(ordem) G_ITEMS=("c|a|b")
+check "expand: grupo respeita a ordem"  'expand_selection "g1" && [ "${SEL_IDX[*]}" = "2 0 1" ]'
+check "expand: grupo + números soltos"  'expand_selection "g1 4" && [ "${SEL_IDX[*]}" = "2 0 1 3" ]'
+check "expand: número antes do grupo"   'expand_selection "4 g1" && [ "${SEL_IDX[*]}" = "3 2 0 1" ]'
+check "expand: não repete o que já veio" 'expand_selection "3 g1" && [ "${SEL_IDX[*]}" = "2 0 1" ]'
+check "expand: gN inexistente avisa"    '! expand_selection "g9" 2>/dev/null; [ "$SEL_WARNED" -eq 1 ]'
+check "expand: token lixo é ignorado"   'expand_selection "x 2" 2>/dev/null && [ "${SEL_IDX[*]}" = "1" ] && [ "$SEL_WARNED" -eq 1 ]'
+check "expand: só números segue igual"  'expand_selection "2 1" && [ "${SEL_IDX[*]}" = "1 0" ]'
+
+G_NAME=(g1) G_ITEMS=("c|a|b")
+check "group_numbers p/ pré-preencher"  '[ "$(group_numbers 0)" = "3 1 2" ]'
+check "group_count conta as APIs"       '[ "$(group_count 0)" = "3" ]'
+
+G_NAME=(g1 g2) G_ITEMS=("c|a|b" "a"); save_groups
+groups_rename_service a a-novo >/dev/null
+check "rename propaga para os grupos"   '[ "${G_ITEMS[0]}" = "c|a-novo|b" ] && [ "${G_ITEMS[1]}" = "a-novo" ]'
+check "rename regrava o groups.conf"    'grep -q "^g1|c|a-novo|b$" "$GROUPS_FILE"'
+
+G_NAME=(g1 g2) G_ITEMS=("c|a|b" "a"); save_groups
+groups_drop_service a >/dev/null 2>&1
+check "remove tira a API dos grupos"    '[ "${G_ITEMS[0]}" = "c|b" ]'
+check "grupo que esvaziou é descartado" '[ "${#G_NAME[@]}" -eq 1 ] && [ "${G_NAME[0]}" = "g1" ]'
+
+G_NAME=(g1) G_ITEMS=("c|sumiu|b")
+check "API órfã no grupo é pulada"      'expand_selection "g1" 2>/dev/null && [ "${SEL_IDX[*]}" = "2 1" ] && [ "$SEL_WARNED" -eq 1 ]'
+check "group_summary marca a órfã"      '[[ "$(group_summary 0 0)" == *"sumiu(?)"* ]]'
 
 echo "trim"
 check "trim apara pontas"               '[ "$(trim "  a b  ")" = "a b" ]'

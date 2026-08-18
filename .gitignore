@@ -3,3 +3,4 @@
 # services.local.conf.example.
 services.conf
 services.local.conf
+groups.conf

@@ -16,9 +16,14 @@ TIMEOUT_SECONDS=300
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 CONF_FILE="$SCRIPT_DIR/services.conf"
 LOCAL_CONF="$SCRIPT_DIR/services.local.conf"
+GROUPS_FILE="$SCRIPT_DIR/groups.conf"
 
 # S_PATH = caminho absoluto do projeto (usado no 'cd'); S_PROJ = nome curto.
 S_NAME=() S_PATH=() S_PROJ=() S_MOD=() S_BUILD=() S_PROFILE=() S_JVM=() S_WAIT=()
+
+# Grupos: G_NAME[i] = nome; G_ITEMS[i] = nomes das APIs separados por '|',
+# na ordem de subida.
+G_NAME=() G_ITEMS=()
 
 WORKSPACE_HISTORY=()
 
@@ -79,14 +84,21 @@ Opções:
   --reconfigure   Refaz a pergunta do caminho da pasta e regrava a escolha.
 
 Variáveis de ambiente:
-  CLEAN=1         Força 'mvn clean install' nos builds (recompila do zero).
-                  Use ao renomear/remover classes ou mudar contratos entre
-                  módulos. Padrão: build incremental (mais rápido).
+  SKIP_CLEAN=1    Build incremental ('mvn install', sem 'clean') — mais rápido
+                  quando você só mexeu no corpo de métodos. Padrão:
+                  'mvn clean install' (recompila do zero).
 
 Arquivos:
   services.conf         Definição dos serviços.
+  groups.conf           Grupos de APIs (seleção + ordem fixa), opção [G].
   services.local.conf   BASE_DIR, TIMEOUT_SECONDS e variáveis dos jvm_args
                         (criado na 1ª execução).
+
+Grupos de APIs:
+  No menu, [G] cria/edita/remove grupos: um grupo é uma seleção de APIs com
+  ordem fixa. Para subir, digite 'gN' (ex.: 'g1') no lugar dos números — e dá
+  para misturar: 'g1 7 2' sobe o grupo 1 e depois o 7º e o 2º serviço.
+  Na confirmação da ordem, [g] grava a seleção que você acabou de digitar.
 
 Sessão existente:
   Se a sessão tmux '$SESSION' já estiver aberta, dá para subir/reiniciar só os
@@ -161,7 +173,7 @@ browse_dir() {
     } >&2
     msg=""
 
-    read -rp "  > " sel >&2
+    read -erp "  > " sel >&2
     case "$sel" in
       q|Q) return 1 ;;
       .)   echo "$cur"; return 0 ;;
@@ -206,7 +218,7 @@ pick_dir() {
     msg=""
 
     local choice
-    read -rp "  > " choice >&2
+    read -erp "  > " choice >&2
 
     case "$choice" in
       q|Q) return 1 ;;
@@ -432,8 +444,11 @@ build_command() {
   local mod="${S_MOD[$i]}" build="${S_BUILD[$i]}"
   local profile="${S_PROFILE[$i]}" jvm="${S_JVM[$i]}"
 
-  local goals="install"
-  [ -n "${CLEAN:-}" ] && goals="clean install"
+  # Padrão: 'clean install' — não reaproveita target/ velho, então renomear ou
+  # remover classes/contratos entre módulos não deixa artefato antigo para trás.
+  # SKIP_CLEAN=1 volta ao build incremental (mais rápido no dia a dia).
+  local goals="clean install"
+  [ -n "${SKIP_CLEAN:-}" ] && goals="install"
 
   local install="mvn $goals -DskipTests"
   if [ -n "${build// /}" ]; then
@@ -632,7 +647,7 @@ handle_service_failure() {
   [ "${S_WAIT[$i]}" = "true" ] || return 0
   [ -t 0 ] || return 0
   local cont
-  read -rp "Serviço '${S_NAME[$i]}' falhou/expirou. Continuar mesmo assim? (s/N): " cont
+  read -erp "Serviço '${S_NAME[$i]}' falhou/expirou. Continuar mesmo assim? (s/N): " cont
   [[ "${cont,,}" == "s" ]] || die "abortado após falha de '${S_NAME[$i]}'."
 }
 
@@ -665,7 +680,7 @@ add_new_service() {
     echo "  ${C_DIM}registram em lote com os nomes sugeridos.${C_RESET}"
     echo ""
     local sel
-    read -rp "  Adicionar qual módulo? " sel
+    read -erp "  Adicionar qual módulo? " sel
     [[ "$sel" == "0" || -z "$sel" ]] && return 0
 
     if [[ "${sel^^}" == "A" ]]; then
@@ -747,7 +762,7 @@ add_modules_bulk() {
 
   clear_screen
   echo "  ${C_CYAN}${C_BOLD}--- Registrar ${#names[@]} API(s) de uma vez ---${C_RESET}"
-  echo "  ${C_DIM}Defaults de cada serviço: build incremental do módulo (-pl -am),${C_RESET}"
+  echo "  ${C_DIM}Defaults de cada serviço: build do módulo e das dependências (-pl -am),${C_RESET}"
   echo "  ${C_DIM}sem profile, wait=true. Nome repetido ganha o projeto como prefixo.${C_RESET}"
   echo "  ${C_DIM}Ajuste nome/profile/jvm_args depois pelo [E].${C_RESET}"
   echo ""
@@ -758,7 +773,7 @@ add_modules_bulk() {
   done
   echo ""
   local confirm
-  read -rp "  Registrar essas ${#names[@]} API(s) no services.conf? (S/n): " confirm
+  read -erp "  Registrar essas ${#names[@]} API(s) no services.conf? (S/n): " confirm
   if [[ "${confirm^^}" == "N" ]]; then
     echo "  Cancelado — nada gravado."
     return 0
@@ -780,12 +795,12 @@ add_one_module() {
   echo ""
   echo "  Novo serviço — projeto '$proj', módulo '${mod:-(raiz)}'."
   echo "  Caminho: $path"
-  echo "  Defaults: build incremental do módulo (-pl -am), sem profile, wait=true."
+  echo "  Defaults: build do módulo e das dependências (-pl -am), sem profile, wait=true."
   echo "  Enter aceita o valor entre [colchetes]."
   echo ""
 
   local name
-  read -rp "    nome no menu [$default_name]: " name; name="${name:-$default_name}"
+  read -erp "    nome no menu [$default_name]: " name; name="${name:-$default_name}"
   if [[ "$name" == *'|'* ]]; then
     echo "  O nome não pode conter '|' (separador do services.conf)."
     return 0
@@ -800,7 +815,7 @@ add_one_module() {
   done
 
   local confirm
-  read -rp "  Adicionar '$name' (projeto=$proj, modulo=${mod:-raiz}) ao services.conf? (S/n): " confirm
+  read -erp "  Adicionar '$name' (projeto=$proj, modulo=${mod:-raiz}) ao services.conf? (S/n): " confirm
   if [[ "${confirm^^}" == "N" ]]; then
     echo "  Cancelado."
     return 0
@@ -824,7 +839,7 @@ edit_services() {
     echo "    [0] Voltar"
     echo ""
     local sel
-    read -rp "  Editar qual serviço? " sel
+    read -erp "  Editar qual serviço? " sel
     [[ "$sel" == "0" || -z "$sel" ]] && return 0
     if ! [[ "$sel" =~ ^[0-9]+$ ]] || [ "$sel" -lt 1 ] || [ "$sel" -gt "${#S_NAME[@]}" ]; then
       echo "  Opção inválida."; pause; continue
@@ -852,7 +867,7 @@ remove_service() {
     echo "    ${C_DIM}[0]${C_RESET} Voltar"
     echo ""
     local sel
-    read -rp "  Remover qual serviço? " sel
+    read -erp "  Remover qual serviço? " sel
     [[ "$sel" == "0" || -z "$sel" ]] && return 0
     if ! [[ "$sel" =~ ^[0-9]+$ ]] || [ "$sel" -lt 1 ] || [ "$sel" -gt "${#S_NAME[@]}" ]; then
       echo "  Opção inválida."; pause; continue
@@ -869,7 +884,7 @@ remove_one_service() {
   echo "  ${C_DIM}projeto: ${S_PROJ[$i]}  |  módulo: ${S_MOD[$i]:-(raiz)}  |  caminho: ${S_PATH[$i]}${C_RESET}"
   echo ""
   local confirm
-  read -rp "  Confirmar remoção? (s/N): " confirm
+  read -erp "  Confirmar remoção? (s/N): " confirm
   if [[ "${confirm,,}" != "s" ]]; then
     echo "  Mantido — nada removido."
     return 0
@@ -886,6 +901,7 @@ remove_one_service() {
   S_WAIT=("${S_WAIT[@]:0:i}" "${S_WAIT[@]:i+1}")
 
   save_services
+  groups_drop_service "$name"
   success "'$name' removido do services.conf."
 }
 
@@ -937,16 +953,19 @@ edit_one_service() {
   fi
 
   local confirm
-  read -rp "  Salvar alterações em services.conf? (S/n): " confirm
+  read -erp "  Salvar alterações em services.conf? (S/n): " confirm
   if [[ "${confirm^^}" == "N" ]]; then
     echo "  Alterações descartadas."
     return 0
   fi
 
+  local old_name="${S_NAME[$i]}"
   S_NAME[$i]="$name"; S_PATH[$i]="$path"
   S_MOD[$i]="$mod"; S_BUILD[$i]="$build"; S_PROFILE[$i]="$profile"
   S_JVM[$i]="$jvm"; S_WAIT[$i]="$wait"
   save_services
+  # Grupos guardam nomes: renomear aqui tem de renomear lá também.
+  [ "$name" != "$old_name" ] && groups_rename_service "$old_name" "$name"
   success "Salvo em services.conf."
 }
 
@@ -971,13 +990,401 @@ save_services() {
   } > "$tmp" && mv "$tmp" "$CONF_FILE" || { rm -f "$tmp"; die "falha ao gravar '$CONF_FILE'."; }
 }
 
-cleanup() {
-  echo ""
-  echo "${C_YELLOW}🛑 Derrubando todas as APIs...${C_RESET}"
-  tmux kill-session -t "$SESSION" 2>/dev/null
-  exit 0
+# =============================================================================
+# Grupos de APIs
+# =============================================================================
+# Um grupo é um atalho para uma seleção em ordem fixa: no menu, 'g1' expande
+# para as APIs do grupo 1, na ordem gravada. Os grupos guardam NOMES (não
+# índices), então reordenar/adicionar serviços no services.conf não os quebra.
+
+groups_header() {
+  cat <<'EOF'
+# =============================================================================
+# groups.conf — grupos de APIs (gerenciado pela opção [G] do menu)
+# =============================================================================
+# Uma linha por grupo, campos separados por '|':
+#   nome_do_grupo | api1 | api2 | api3 | ...
+#
+# A ordem das APIs na linha É a ordem de subida. Os nomes são os do
+# services.conf; nome que não existe mais é ignorado (com aviso) ao subir.
+#
+# Dá para editar à mão — o menu [G] regrava este arquivo.
+# =============================================================================
+EOF
 }
-trap cleanup SIGINT SIGTERM
+
+# Nº de APIs de um grupo (pelo índice).
+group_count() {
+  local items=(); IFS='|' read -r -a items <<< "${G_ITEMS[$1]}"
+  printf '%s' "${#items[@]}"
+}
+
+# Resumo "a → b → c" de um grupo. $2 = máx. de nomes exibidos (0 = todos);
+# API que não está mais no services.conf sai marcada com '(?)'.
+group_summary() {
+  local i="$1" max="${2:-0}" out="" n=0 m
+  local items=(); IFS='|' read -r -a items <<< "${G_ITEMS[$i]}"
+  for m in "${items[@]}"; do
+    n=$((n + 1))
+    if [ "$max" -gt 0 ] && [ "$n" -gt "$max" ]; then
+      out+=" → …+$(( ${#items[@]} - max ))"
+      break
+    fi
+    service_index "$m" >/dev/null || m="$m(?)"
+    out+="${out:+ → }$m"
+  done
+  printf '%s' "$out"
+}
+
+# Números do menu correspondentes às APIs do grupo, na ordem dele. Serve para
+# pré-preencher a edição (as órfãs simplesmente não aparecem).
+group_numbers() {
+  local i="$1" out="" m idx
+  local items=(); IFS='|' read -r -a items <<< "${G_ITEMS[$i]}"
+  for m in "${items[@]}"; do
+    idx="$(service_index "$m")" || continue
+    out+="${out:+ }$((idx + 1))"
+  done
+  printf '%s' "$out"
+}
+
+load_groups() {
+  G_NAME=() G_ITEMS=()
+  [ -f "$GROUPS_FILE" ] || return 0
+
+  local line name rest lineno=0 norm it
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    [[ -z "${line//[[:space:]]/}" ]] && continue
+    [[ "${line#"${line%%[![:space:]]*}"}" == \#* ]] && continue
+
+    if [[ "$line" != *'|'* ]]; then
+      warn "$GROUPS_FILE: linha $lineno sem '|' — esperado 'grupo|api1|api2|...'."
+      continue
+    fi
+    name="$(trim "${line%%|*}")"
+    rest="${line#*|}"
+
+    norm=""
+    while IFS= read -r it; do
+      it="$(trim "$it")"
+      [ -z "$it" ] && continue
+      norm+="${norm:+|}$it"
+    done < <(printf '%s\n' "${rest//|/$'\n'}")
+
+    if [ -z "$name" ] || [ -z "$norm" ]; then
+      warn "$GROUPS_FILE: linha $lineno ignorada (grupo sem nome ou sem APIs)."
+      continue
+    fi
+    G_NAME+=("$name"); G_ITEMS+=("$norm")
+  done < "$GROUPS_FILE"
+}
+
+save_groups() {
+  local tmp="$GROUPS_FILE.tmp.$$" i
+  {
+    groups_header
+    for i in "${!G_NAME[@]}"; do
+      echo "${G_NAME[$i]}|${G_ITEMS[$i]}"
+    done
+  } > "$tmp" && mv "$tmp" "$GROUPS_FILE" \
+    || { rm -f "$tmp"; die "falha ao gravar '$GROUPS_FILE'."; }
+}
+
+# Índice do serviço com esse nome (stdout); 1 se não existir.
+service_index() {
+  local name="$1" i
+  for i in "${!S_NAME[@]}"; do
+    if [ "${S_NAME[$i]}" = "$name" ]; then printf '%s' "$i"; return 0; fi
+  done
+  return 1
+}
+
+# Traduz a entrada do menu ("3 1 g2 7") em índices de S_NAME: na ordem digitada,
+# sem repetir, expandindo 'gN' na ordem gravada do grupo. Resultado em SEL_IDX;
+# SEL_WARNED=1 se algo foi ignorado. Retorna 1 se sobrou nada válido.
+SEL_IDX=() SEL_WARNED=0
+expand_selection() {
+  local input="$1"
+  SEL_IDX=(); SEL_WARNED=0
+
+  local seen=" " tok idx gi m
+  for tok in $input; do
+    if [[ "$tok" =~ ^[Gg]([0-9]+)$ ]]; then
+      gi=$(( ${BASH_REMATCH[1]} - 1 ))
+      if [ "$gi" -lt 0 ] || [ "$gi" -ge "${#G_NAME[@]}" ]; then
+        warn "grupo '$tok' não existe, ignorando."; SEL_WARNED=1; continue
+      fi
+      local items=(); IFS='|' read -r -a items <<< "${G_ITEMS[$gi]}"
+      for m in "${items[@]}"; do
+        [ -z "$m" ] && continue
+        if ! idx="$(service_index "$m")"; then
+          warn "grupo '${G_NAME[$gi]}' cita '$m', que não está no services.conf — ignorando."
+          SEL_WARNED=1; continue
+        fi
+        [[ "$seen" == *" $idx "* ]] && continue
+        SEL_IDX+=("$idx"); seen+="$idx "
+      done
+      continue
+    fi
+
+    if ! [[ "$tok" =~ ^[0-9]+$ ]]; then
+      warn "'$tok' não é número nem grupo (gN), ignorando."; SEL_WARNED=1; continue
+    fi
+    idx=$((tok - 1))
+    if [ "$idx" -lt 0 ] || [ "$idx" -ge "${#S_NAME[@]}" ]; then
+      warn "número '$tok' inválido, ignorando."; SEL_WARNED=1; continue
+    fi
+    [[ "$seen" == *" $idx "* ]] && continue
+    SEL_IDX+=("$idx"); seen+="$idx "
+  done
+
+  [ "${#SEL_IDX[@]}" -gt 0 ]
+}
+
+# Lista numerada dos serviços, para as telas que pedem uma seleção.
+print_service_list() {
+  local i
+  if [ "${#S_NAME[@]}" -eq 0 ]; then
+    echo "    ${C_DIM}(nenhum serviço cadastrado)${C_RESET}"
+    return 0
+  fi
+  for i in "${!S_NAME[@]}"; do
+    printf "    ${C_DIM}[%d]${C_RESET} %s ${C_DIM}( %s )${C_RESET}\n" \
+      "$((i+1))" "${S_NAME[$i]}" "${S_PROJ[$i]}"
+  done
+}
+
+# Pede um nome de grupo válido (não vazio, sem '|', não repetido). Ecoa o nome;
+# retorna 1 se cancelado (Enter vazio). $1 = pré-preenchido, $2 = índice a
+# ignorar na checagem de duplicado (-1 ao criar). Interação vai para stderr.
+read_group_name() {
+  local initial="$1" skip="${2:--1}" name j dup
+  while true; do
+    read -erp "  Nome do grupo (Enter cancela): " -i "$initial" name >&2
+    name="$(trim "$name")"
+    [ -z "$name" ] && return 1
+    if [[ "$name" == *'|'* ]]; then
+      echo "  O nome não pode conter '|' (separador do groups.conf)." >&2; continue
+    fi
+    dup=0
+    for j in "${!G_NAME[@]}"; do
+      [ "$j" -eq "$skip" ] && continue
+      [ "${G_NAME[$j]}" = "$name" ] && { dup=1; break; }
+    done
+    [ "$dup" -eq 1 ] && { echo "  Já existe um grupo chamado '$name'." >&2; continue; }
+    printf '%s' "$name"; return 0
+  done
+}
+
+# Pede a seleção ordenada de APIs do grupo e ecoa os nomes juntados por '|'.
+# Retorna 1 se cancelado. $1 = pré-preenchimento (números). Interação em stderr.
+read_group_items() {
+  local initial="$1" sel out idx
+  while true; do
+    {
+      echo ""
+      echo "  Digite os números na ordem de subida (ex.: 6 1 3)."
+      echo "  ${C_DIM}Outros grupos também valem como atalho (gN). Enter cancela.${C_RESET}"
+    } >&2
+    read -erp "  Seleção: " -i "$initial" sel >&2
+    [ -z "${sel//[[:space:]]/}" ] && return 1
+    if ! expand_selection "$sel"; then
+      echo "  Nenhuma API válida na seleção." >&2; continue
+    fi
+    out=""
+    for idx in "${SEL_IDX[@]}"; do out+="${out:+|}${S_NAME[$idx]}"; done
+    printf '%s' "$out"; return 0
+  done
+}
+
+create_group() {
+  if [ "${#S_NAME[@]}" -eq 0 ]; then
+    echo "  Nenhum serviço cadastrado — use [N] no menu antes de criar grupos."
+    return 0
+  fi
+  clear_screen
+  echo "  ${C_CYAN}${C_BOLD}--- Novo grupo de APIs ---${C_RESET}"
+  echo "  ${C_DIM}O grupo guarda a seleção E a ordem; depois basta digitar 'gN' no menu.${C_RESET}"
+  echo ""
+  print_service_list
+
+  local name items
+  name="$(read_group_name "" -1)" || { echo "  Cancelado — grupo não criado."; return 0; }
+  items="$(read_group_items "")"  || { echo "  Cancelado — grupo não criado."; return 0; }
+
+  G_NAME+=("$name"); G_ITEMS+=("$items")
+  save_groups
+  success "grupo '${C_BOLD}$name${C_RESET}' criado com $(group_count $(( ${#G_NAME[@]} - 1 ))) API(s) — use '${C_BOLD}g${#G_NAME[@]}${C_RESET}' no menu."
+}
+
+edit_one_group() {
+  local i="$1"
+  clear_screen
+  echo "  ${C_CYAN}${C_BOLD}--- Editar grupo '${G_NAME[$i]}' ---${C_RESET}"
+  echo "  ${C_DIM}Ordem atual: $(group_summary "$i" 0)${C_RESET}"
+  echo "  ${C_DIM}A seleção vem pré-preenchida com os números atuais: edite e Enter grava.${C_RESET}"
+  echo ""
+  print_service_list
+
+  local name items
+  name="$(read_group_name "${G_NAME[$i]}" "$i")" || { echo "  Cancelado — nada alterado."; return 0; }
+  items="$(read_group_items "$(group_numbers "$i")")" || { echo "  Cancelado — nada alterado."; return 0; }
+
+  if [ "$name" = "${G_NAME[$i]}" ] && [ "$items" = "${G_ITEMS[$i]}" ]; then
+    echo "  (Nenhuma alteração — nada gravado.)"
+    return 0
+  fi
+  G_NAME[$i]="$name"; G_ITEMS[$i]="$items"
+  save_groups
+  success "grupo '$name' atualizado."
+}
+
+remove_one_group() {
+  local i="$1"
+  echo ""
+  echo "  Remover o grupo '${C_BOLD}${G_NAME[$i]}${C_RESET}' ($(group_count "$i") API(s))"
+  echo "  ${C_DIM}$(group_summary "$i" 0)${C_RESET}"
+  echo "  ${C_DIM}As APIs em si não são removidas — só o atalho.${C_RESET}"
+  echo ""
+  local confirm
+  read -erp "  Confirmar remoção? (s/N): " confirm
+  if [[ "${confirm,,}" != "s" ]]; then
+    echo "  Mantido — nada removido."
+    return 0
+  fi
+  local name="${G_NAME[$i]}"
+  G_NAME=("${G_NAME[@]:0:i}" "${G_NAME[@]:i+1}")
+  G_ITEMS=("${G_ITEMS[@]:0:i}" "${G_ITEMS[@]:i+1}")
+  save_groups
+  success "grupo '$name' removido."
+}
+
+# [G] no menu: cria, edita e remove grupos.
+manage_groups() {
+  while true; do
+    clear_screen
+    echo "  ${C_CYAN}${C_BOLD}--- Grupos de APIs (grava em groups.conf) ---${C_RESET}"
+    echo "  ${C_DIM}Um grupo = uma seleção de APIs com ordem fixa, chamada por 'gN' no menu.${C_RESET}"
+    echo ""
+    local i
+    if [ "${#G_NAME[@]}" -eq 0 ]; then
+      echo "    ${C_DIM}(nenhum grupo criado ainda)${C_RESET}"
+    else
+      for i in "${!G_NAME[@]}"; do
+        printf "    ${C_DIM}[g%d]${C_RESET} ${C_BOLD}%s${C_RESET} ${C_DIM}(%s API(s))${C_RESET}\n" \
+          "$((i+1))" "${G_NAME[$i]}" "$(group_count "$i")"
+        echo "         ${C_DIM}$(group_summary "$i" 6)${C_RESET}"
+      done
+    fi
+    echo ""
+    echo "    ${C_DIM}[N]${C_RESET} Criar grupo"
+    echo "    ${C_DIM}[E]${C_RESET} Editar grupo (nome/seleção/ordem)"
+    echo "    ${C_DIM}[R]${C_RESET} Remover grupo"
+    echo "    ${C_DIM}[0]${C_RESET} Voltar ao menu"
+    echo ""
+
+    local sel
+    read -erp "  > " sel
+    case "${sel^^}" in
+      0|'') return 0 ;;
+      N) create_group; pause; continue ;;
+      E|R) ;;
+      *) echo "  Opção inválida."; pause; continue ;;
+    esac
+
+    if [ "${#G_NAME[@]}" -eq 0 ]; then
+      echo "  Nenhum grupo para ${sel^^} — use [N] primeiro."; pause; continue
+    fi
+    local action="${sel^^}" num
+    read -erp "  Qual grupo? (número, 0 volta) " num
+    [[ -z "$num" || "$num" == "0" ]] && continue
+    if ! [[ "$num" =~ ^[0-9]+$ ]] || [ "$num" -lt 1 ] || [ "$num" -gt "${#G_NAME[@]}" ]; then
+      echo "  Opção inválida."; pause; continue
+    fi
+    if [ "$action" = "E" ]; then
+      edit_one_group "$((num-1))"
+    else
+      remove_one_group "$((num-1))"
+    fi
+    pause
+  done
+}
+
+# [g] na confirmação da ordem: grava a seleção recém-digitada como grupo novo.
+save_order_as_group() {
+  local idxs=("$@") name items="" i
+  echo ""
+  name="$(read_group_name "" -1)" || { echo "Grupo não criado."; return 0; }
+  for i in "${idxs[@]}"; do items+="${items:+|}${S_NAME[$i]}"; done
+  G_NAME+=("$name"); G_ITEMS+=("$items")
+  save_groups
+  success "grupo '${C_BOLD}$name${C_RESET}' criado com ${#idxs[@]} API(s) — na próxima vez, digite '${C_BOLD}g${#G_NAME[@]}${C_RESET}'."
+}
+
+# Mantém os grupos coerentes quando um serviço é renomeado pelo [E].
+groups_rename_service() {
+  local old="$1" new="$2" i m out changed=0
+  for i in "${!G_NAME[@]}"; do
+    local items=(); IFS='|' read -r -a items <<< "${G_ITEMS[$i]}"
+    out=""
+    for m in "${items[@]}"; do
+      [ "$m" = "$old" ] && { m="$new"; changed=1; }
+      out+="${out:+|}$m"
+    done
+    G_ITEMS[$i]="$out"
+  done
+  if [ "$changed" -eq 1 ]; then
+    save_groups
+    info "  Grupos atualizados: '$old' -> '$new'."
+  fi
+  return 0
+}
+
+# Idem para o [R]: tira a API dos grupos e descarta grupo que ficou vazio.
+groups_drop_service() {
+  local name="$1" i m out changed=0
+  local keep_name=() keep_items=() dropped=()
+  for i in "${!G_NAME[@]}"; do
+    local items=(); IFS='|' read -r -a items <<< "${G_ITEMS[$i]}"
+    out=""
+    for m in "${items[@]}"; do
+      [ "$m" = "$name" ] && { changed=1; continue; }
+      out+="${out:+|}$m"
+    done
+    if [ -z "$out" ]; then
+      dropped+=("${G_NAME[$i]}"); changed=1; continue
+    fi
+    keep_name+=("${G_NAME[$i]}"); keep_items+=("$out")
+  done
+  [ "$changed" -eq 0 ] && return 0
+
+  if [ "${#keep_name[@]}" -eq 0 ]; then
+    G_NAME=(); G_ITEMS=()
+  else
+    G_NAME=("${keep_name[@]}"); G_ITEMS=("${keep_items[@]}")
+  fi
+  save_groups
+  info "  '$name' saiu dos grupos que a citavam."
+  [ "${#dropped[@]}" -gt 0 ] && warn "grupo(s) removido(s) por ficar(em) vazio(s): ${dropped[*]}"
+  return 0
+}
+
+# Ctrl-C (e SIGTERM) encerram apenas ESTE script — as janelas tmux seguem de pé.
+# Derrubar as APIs passa a ser sempre explícito ('tmux kill-session' ou [r] no
+# menu): antes, um Ctrl-C dado fora do tmux matava serviços que já rodavam.
+on_interrupt() {
+  echo ""
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "${C_YELLOW}⏹ Saindo do pequizero — as APIs continuam rodando.${C_RESET}"
+    echo "  ${C_DIM}Reanexar: tmux attach -t $SESSION${C_RESET}"
+    echo "  ${C_DIM}Derrubar: tmux kill-session -t $SESSION${C_RESET}"
+  else
+    echo "${C_YELLOW}⏹ Cancelado — nada foi iniciado.${C_RESET}"
+  fi
+  exit 130
+}
+trap on_interrupt SIGINT SIGTERM
 
 handle_existing_session() {
   tmux has-session -t "$SESSION" 2>/dev/null || return 0
@@ -988,7 +1395,7 @@ handle_existing_session() {
   echo "  ${C_DIM}[a]${C_RESET} Só anexar (descarta a seleção)"
   echo "  ${C_DIM}[c]${C_RESET} Cancelar"
   local ans
-  read -rp "  > " ans
+  read -erp "  > " ans
   case "${ans,,}" in
     u) ;;
     r) tmux kill-session -t "$SESSION" 2>/dev/null ;;
@@ -1015,8 +1422,18 @@ print_menu() {
         "$((i+1))" "${S_NAME[$i]}" "${S_PROJ[$i]}"
     done
   fi
+  if [ "${#G_NAME[@]}" -gt 0 ]; then
+    echo ""
+    echo "  Grupos (sobem na ordem gravada):"
+    echo ""
+    for i in "${!G_NAME[@]}"; do
+      printf "  ${C_DIM}[g%d]${C_RESET} ${C_BOLD}%s${C_RESET} ${C_DIM}(%s API(s): %s)${C_RESET}\n" \
+        "$((i+1))" "${G_NAME[$i]}" "$(group_count "$i")" "$(group_summary "$i" 4)"
+    done
+  fi
   echo ""
   echo "  ${C_DIM}[A]${C_RESET} Todas na ordem padrão (Enter)"
+  echo "  ${C_DIM}[G]${C_RESET} Grupos de APIs (criar/editar/remover)"
   echo "  ${C_DIM}[N]${C_RESET} Adicionar serviços (um, vários ou todos os detectados)"
   echo "  ${C_DIM}[E]${C_RESET} Editar serviços"
   echo "  ${C_DIM}[R]${C_RESET} Remover serviço"
@@ -1029,6 +1446,8 @@ print_menu() {
   echo ""
   echo "  A ordem dos números define a ordem de execução."
   echo "  Ex: '6 1 3' inicia o 6º, depois o 1º, depois o 3º."
+  echo "  Grupos entram como 'gN' e podem se misturar aos números:"
+  echo "  ${C_DIM}'g1' sobe o grupo 1 na ordem dele; 'g1 7 2' sobe o grupo e mais o 7º e o 2º.${C_RESET}"
   echo ""
 }
 
@@ -1045,15 +1464,17 @@ main() {
   bootstrap_local_conf
   load_local_conf
   load_services
+  load_groups
   warn_undefined_vars
   refresh_scan_count
 
-  # [N]/[E]/[R]/[W] e o "não confirmar" voltam ao menu; só sai ao confirmar.
+  # [G]/[N]/[E]/[R]/[W] e o "não confirmar" voltam ao menu; só sai ao confirmar.
   local INPUT EXEC_ORDER=()
   while true; do
     print_menu
-    read -rp "Escolha: " INPUT
+    read -erp "Escolha: " INPUT
     case "${INPUT^^}" in
+      G) manage_groups; continue ;;
       N) add_new_service; refresh_scan_count; pause; continue ;;
       E) edit_services;   pause; continue ;;
       R) remove_service;  refresh_scan_count; pause; continue ;;
@@ -1061,23 +1482,13 @@ main() {
     esac
 
     EXEC_ORDER=()
-    local SEEN=" " i warned=0
+    local i
     if [[ -z "$INPUT" || "${INPUT^^}" == "A" ]]; then
       for i in "${!S_NAME[@]}"; do EXEC_ORDER+=("$i"); done
     else
-      local num idx
-      for num in $INPUT; do
-        if ! [[ "$num" =~ ^[0-9]+$ ]]; then
-          echo "AVISO: '$num' não é número, ignorando."; warned=1; continue
-        fi
-        idx=$((num - 1))
-        if [ "$idx" -lt 0 ] || [ "$idx" -ge "${#S_NAME[@]}" ]; then
-          echo "AVISO: número '$num' inválido, ignorando."; warned=1; continue
-        fi
-        [[ "$SEEN" == *" $idx "* ]] && continue
-        EXEC_ORDER+=("$idx"); SEEN+="$idx "
-      done
-      [ "$warned" -eq 1 ] && pause
+      # Aceita números e grupos ('gN') misturados, na ordem digitada.
+      expand_selection "$INPUT" && EXEC_ORDER=("${SEL_IDX[@]}")
+      [ "$SEL_WARNED" -eq 1 ] && pause
     fi
 
     if [ "${#EXEC_ORDER[@]}" -eq 0 ]; then
@@ -1094,10 +1505,17 @@ main() {
       step=$((step + 1))
     done
 
-    echo ""
-    local CONFIRM
-    read -rp "Confirma? (S/n): " CONFIRM
-    if [[ "${CONFIRM^^}" == "N" ]]; then
+    local CONFIRM confirmed=0
+    while true; do
+      echo ""
+      read -erp "Confirma? (S/n) — [g] salva esta ordem como grupo: " CONFIRM
+      case "${CONFIRM,,}" in
+        n) break ;;
+        g) save_order_as_group "${EXEC_ORDER[@]}"; continue ;;
+        *) confirmed=1; break ;;
+      esac
+    done
+    if [ "$confirmed" -eq 0 ]; then
       echo "Cancelado — voltando ao menu."
       pause; continue
     fi
@@ -1118,6 +1536,11 @@ main() {
   echo ""
   success "${C_BOLD}APIs iniciadas!${C_RESET}"
   tmux attach -t "$SESSION"
+
+  # Chega aqui quando você desanexa (Ctrl-b d) — a sessão continua viva.
+  echo ""
+  echo "${C_DIM}Sessão '$SESSION' segue rodando. Reanexar: tmux attach -t $SESSION${C_RESET}"
+  echo "${C_DIM}Derrubar todas: tmux kill-session -t $SESSION${C_RESET}"
 }
 
 # Executa main só quando rodado diretamente (não quando "sourced", ex.: testes).

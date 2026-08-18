@@ -17,30 +17,31 @@ setup() {
 
 # --- build_command --------------------------------------------------------
 
-@test "build_command: build do módulo (-pl -am) quando build_modules vazio" {
+@test "build_command: build do módulo (-pl -am clean install) quando build_modules vazio" {
   S_PATH=(/ws/p) S_PROJ=(p) S_MOD=(srv) S_BUILD=("") S_PROFILE=("") S_JVM=("")
   run build_command 0
   [[ "$output" == *'cd "/ws/p"'* ]]
-  [[ "$output" == *"mvn -pl srv -am install -DskipTests"* ]]
+  [[ "$output" == *"mvn -pl srv -am clean install -DskipTests"* ]]
   [[ "$output" == *"mvn -pl srv spring-boot:run"* ]]
 }
 
 @test "build_command: build full quando modulo e build_modules vazios" {
   S_PATH=(/ws/p) S_PROJ=(p) S_MOD=("") S_BUILD=("") S_PROFILE=("") S_JVM=("")
   run build_command 0
-  [[ "$output" == *"mvn install -DskipTests"* ]]
+  [[ "$output" == *"mvn clean install -DskipTests"* ]]
 }
 
 @test "build_command: usa -pl no install quando build_modules definido" {
   S_PATH=(/ws/p) S_PROJ=(p) S_MOD=(a) S_BUILD=("core,security,a") S_PROFILE=("") S_JVM=("")
   run build_command 0
-  [[ "$output" == *"mvn -pl core,security,a -am install"* ]]
+  [[ "$output" == *"mvn -pl core,security,a -am clean install"* ]]
 }
 
-@test "build_command: CLEAN=1 força clean install" {
-  S_PATH=(/ws/p) S_PROJ=(p) S_MOD=("") S_BUILD=("") S_PROFILE=("") S_JVM=("")
-  CLEAN=1 run build_command 0
-  [[ "$output" == *"mvn clean install -DskipTests"* ]]
+@test "build_command: SKIP_CLEAN=1 volta ao build incremental (sem clean)" {
+  S_PATH=(/ws/p) S_PROJ=(p) S_MOD=(srv) S_BUILD=("") S_PROFILE=("") S_JVM=("")
+  SKIP_CLEAN=1 run build_command 0
+  [[ "$output" == *"mvn -pl srv -am install -DskipTests"* ]]
+  [[ "$output" != *"clean"* ]]
 }
 
 @test "build_command: adiciona profile quando definido" {
@@ -361,6 +362,189 @@ EOF
   add_modules_bulk 0 1 <<<'s' >/dev/null 2>&1
   [ "${#S_NAME[@]}" -eq 1 ]
   [ "${S_NAME[0]}" = "srv" ]
+}
+
+# --- grupos de APIs -------------------------------------------------------
+
+# Cadastra 4 serviços (a, b, c, d) e um groups.conf isolado por teste.
+setup_groups() {
+  CONF_FILE="$BATS_TEST_TMPDIR/g.conf"
+  GROUPS_FILE="$BATS_TEST_TMPDIR/groups.conf"
+  printf 'a|/ws/a|a|m||||true\nb|/ws/b|b|m||||true\nc|/ws/c|c|m||||true\nd|/ws/d|d|m||||true\n' \
+    > "$CONF_FILE"
+  load_services 2>/dev/null
+  G_NAME=() G_ITEMS=()
+}
+
+@test "save_groups/load_groups: ida e volta preservando a ordem" {
+  setup_groups
+  G_NAME=(painel) G_ITEMS=("c|a|b")
+  save_groups
+  grep -q '^painel|c|a|b$' "$GROUPS_FILE"
+  G_NAME=() G_ITEMS=()
+  load_groups 2>/dev/null
+  [ "${#G_NAME[@]}" -eq 1 ]
+  [ "${G_NAME[0]}" = "painel" ]
+  [ "${G_ITEMS[0]}" = "c|a|b" ]
+}
+
+@test "load_groups: apara espaços e ignora comentário/linha inválida" {
+  setup_groups
+  printf 'espacos |  c | a  \n# comentario\n\nsem_pipe\nvazio|  |\n' > "$GROUPS_FILE"
+  load_groups 2>/dev/null
+  [ "${#G_NAME[@]}" -eq 1 ]
+  [ "${G_NAME[0]}" = "espacos" ]
+  [ "${G_ITEMS[0]}" = "c|a" ]
+}
+
+@test "expand_selection: gN expande na ordem gravada do grupo" {
+  setup_groups
+  G_NAME=(painel) G_ITEMS=("c|a|b")
+  expand_selection "g1"
+  [ "${SEL_IDX[*]}" = "2 0 1" ]
+  [ "$SEL_WARNED" -eq 0 ]
+}
+
+@test "expand_selection: grupo e números soltos se misturam na ordem digitada" {
+  setup_groups
+  G_NAME=(painel) G_ITEMS=("c|a")
+  expand_selection "g1 4"
+  [ "${SEL_IDX[*]}" = "2 0 3" ]
+  expand_selection "4 g1"
+  [ "${SEL_IDX[*]}" = "3 2 0" ]
+}
+
+@test "expand_selection: não repete serviço já incluído" {
+  setup_groups
+  G_NAME=(painel) G_ITEMS=("c|a|b")
+  expand_selection "3 g1 1"
+  [ "${SEL_IDX[*]}" = "2 0 1" ]
+}
+
+@test "expand_selection: token inválido avisa e é ignorado" {
+  setup_groups
+  expand_selection "x 2" 2>/dev/null
+  [ "${SEL_IDX[*]}" = "1" ]
+  [ "$SEL_WARNED" -eq 1 ]
+}
+
+@test "expand_selection: gN inexistente não seleciona nada" {
+  setup_groups
+  run expand_selection "g9"
+  [ "$status" -ne 0 ]
+}
+
+@test "expand_selection: API do grupo que saiu do conf é pulada com aviso" {
+  setup_groups
+  G_NAME=(painel) G_ITEMS=("c|sumiu|b")
+  expand_selection "g1" 2>/dev/null
+  [ "${SEL_IDX[*]}" = "2 1" ]
+  [ "$SEL_WARNED" -eq 1 ]
+}
+
+@test "group_numbers/group_count: números atuais para pré-preencher a edição" {
+  setup_groups
+  G_NAME=(painel) G_ITEMS=("c|a|b")
+  run group_numbers 0
+  [ "$output" = "3 1 2" ]
+  run group_count 0
+  [ "$output" = "3" ]
+}
+
+@test "group_summary: marca com (?) a API que não existe mais" {
+  setup_groups
+  G_NAME=(painel) G_ITEMS=("c|sumiu")
+  run group_summary 0 0
+  [[ "$output" == *"sumiu(?)"* ]]
+}
+
+@test "edit_one_service: renomear serviço renomeia dentro dos grupos" {
+  setup_groups
+  G_NAME=(painel) G_ITEMS=("c|a|b")
+  save_groups
+  edit_one_service 0 >/dev/null 2>&1 <<'EOF'
+a-novo
+/ws/a
+m
+
+
+
+true
+s
+EOF
+  [ "${G_ITEMS[0]}" = "c|a-novo|b" ]
+  grep -q '^painel|c|a-novo|b$' "$GROUPS_FILE"
+}
+
+@test "remove_one_service: tira a API dos grupos e descarta grupo vazio" {
+  setup_groups
+  G_NAME=(painel so-a) G_ITEMS=("c|a|b" "a")
+  save_groups
+  remove_one_service 0 <<<'s' >/dev/null 2>&1
+  [ "${#G_NAME[@]}" -eq 1 ]
+  [ "${G_NAME[0]}" = "painel" ]
+  [ "${G_ITEMS[0]}" = "c|b" ]
+}
+
+@test "create_group: grava nome + seleção na ordem digitada" {
+  setup_groups
+  create_group >/dev/null 2>&1 <<'EOF'
+meu-grupo
+3 1
+EOF
+  [ "${#G_NAME[@]}" -eq 1 ]
+  [ "${G_NAME[0]}" = "meu-grupo" ]
+  [ "${G_ITEMS[0]}" = "c|a" ]
+}
+
+@test "create_group: Enter no nome cancela sem gravar" {
+  setup_groups
+  create_group >/dev/null 2>&1 <<'EOF'
+
+EOF
+  [ "${#G_NAME[@]}" -eq 0 ]
+  [ ! -f "$GROUPS_FILE" ]
+}
+
+@test "create_group: nome com '|' é rejeitado e pedido de novo" {
+  setup_groups
+  create_group >/dev/null 2>&1 <<'EOF'
+com|pipe
+valido
+2
+EOF
+  [ "${G_NAME[0]}" = "valido" ]
+  [ "${G_ITEMS[0]}" = "b" ]
+}
+
+@test "edit_one_group: troca nome e ordem" {
+  setup_groups
+  G_NAME=(antigo) G_ITEMS=("c|a")
+  edit_one_group 0 >/dev/null 2>&1 <<'EOF'
+novo
+2 3 1
+EOF
+  [ "${G_NAME[0]}" = "novo" ]
+  [ "${G_ITEMS[0]}" = "b|c|a" ]
+}
+
+@test "remove_one_group: só sai com confirmação" {
+  setup_groups
+  G_NAME=(um dois) G_ITEMS=("a" "b")
+  remove_one_group 0 <<<'n' >/dev/null 2>&1
+  [ "${#G_NAME[@]}" -eq 2 ]
+  remove_one_group 0 <<<'s' >/dev/null 2>&1
+  [ "${#G_NAME[@]}" -eq 1 ]
+  [ "${G_NAME[0]}" = "dois" ]
+}
+
+@test "save_order_as_group: grava a ordem confirmada como grupo novo" {
+  setup_groups
+  save_order_as_group 2 0 >/dev/null 2>&1 <<'EOF'
+do-confirma
+EOF
+  [ "${G_ITEMS[0]}" = "c|a" ]
+  grep -q '^do-confirma|c|a$' "$GROUPS_FILE"
 }
 
 # --- trim -----------------------------------------------------------------

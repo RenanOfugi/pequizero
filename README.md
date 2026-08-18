@@ -43,7 +43,9 @@ de cor):
 
 ```
 [1..n]  os serviços cadastrados — digite os números na ordem em que quer subir
+[g1..n] os grupos — sobem a seleção do grupo na ordem gravada
 [A]     todas na ordem padrão (ou só Enter)
+[G]     grupos de APIs — criar, editar, remover
 [N]     adicionar serviços — um, vários ou todos os detectados no workspace
 [E]     editar serviços
 [R]     remover serviço
@@ -54,6 +56,60 @@ A ordem dos números define a ordem de execução: `6 1 3` sobe o 6º, depois o 
 depois o 3º. Serviços com `wait=true` seguram a fila até terminarem de subir
 (ou até o timeout — ver [Timeout de startup](#timeout-de-startup)).
 
+Os prompts do menu aceitam edição de linha: `←`/`→` andam com o cursor,
+`Backspace`/`Delete` apagam, `Home`/`End` (ou `Ctrl-a`/`Ctrl-e`) vão para as
+pontas e `Ctrl-w` apaga a última palavra — dá para corrigir a digitação antes
+de confirmar com `Enter`.
+
+## Grupos de APIs — `[G]`
+
+Um **grupo** é uma seleção de APIs com **ordem fixa**, salva com um nome. Em vez
+de digitar os mesmos 20 números toda vez, você monta o grupo uma vez e depois
+sobe tudo com `g1`.
+
+```
+Grupos (sobem na ordem gravada):
+
+[g1] painel-completo (20 API(s): seguranca-api → autenticacao-api → painel-api → categoria-api → …+16)
+[g2] minimo          (2 API(s): seguranca-api → worker)
+```
+
+**Como usar na seleção:**
+
+| Você digita | O que sobe |
+| --- | --- |
+| `g1` | as APIs do grupo 1, na ordem gravada |
+| `g1 7 2` | o grupo 1 e, depois, o 7º e o 2º serviço |
+| `4 g2` | o 4º serviço e, depois, o grupo 2 |
+| `g1 g2` | os dois grupos em sequência |
+
+Serviço que apareceria duas vezes (porque está no grupo e você digitou o número
+dele também) entra **só na primeira posição** — a ordem não duplica janela.
+
+**Como criar:**
+
+- **`[G]` → `[N]`** — pede o nome e a seleção (`6 1 3`, na ordem de subida).
+  Dentro da seleção, outros grupos (`gN`) também valem como atalho.
+- **direto da confirmação** — depois de digitar uma ordem no menu, a pergunta
+  `Confirma? (S/n) — [g] salva esta ordem como grupo:` aceita `g`: você dá um
+  nome e aquela ordem fica salva como grupo.
+
+**Editar e remover:** `[G]` → `[E]` traz o nome e os números atuais
+**pré-preenchidos** (edite com as setas e Enter grava) e `[G]` → `[R]` apaga só
+o atalho, nunca as APIs.
+
+Os grupos ficam em `groups.conf`, uma linha por grupo:
+
+```
+painel-completo|seguranca-api|autenticacao-api|painel-api
+```
+
+Como o grupo guarda **nomes** (não posições), reordenar ou adicionar serviços no
+`services.conf` não quebra nada. Renomear um serviço pelo `[E]` renomeia dentro
+dos grupos; removê-lo pelo `[R]` tira ele dos grupos (e descarta grupo que ficou
+vazio). Se algum nome sobrar órfão — por edição à mão, por exemplo — ele aparece
+marcado com `(?)` na listagem e é ignorado com aviso na hora de subir.
+
 ## Subir, reiniciar e derrubar
 
 Confirmada a seleção, cada serviço é compilado e iniciado em uma **janela tmux**
@@ -61,7 +117,10 @@ própria, na sessão `apis`.
 
 - Dentro do tmux: `Ctrl-b n`/`Ctrl-b p` alterna entre as janelas,
   `Ctrl-b d` desanexa sem derrubar nada.
-- `Ctrl-C` no terminal do script derruba a **sessão inteira** (todas as APIs).
+- `Ctrl-C` no terminal do script **só encerra o script** — as APIs continuam
+  rodando na sessão `apis` (reanexe com `tmux attach -t apis`).
+- Para derrubar tudo de fato: `tmux kill-session -t apis` (ou `[r]` no menu,
+  que recria a sessão do zero).
 
 ### Sessão já aberta — reiniciar uma API
 
@@ -76,14 +135,17 @@ o que fazer:
 - **`[a]` Só anexar** — entra na sessão como está, sem subir nada.
 - **`[c]` Cancelar** — não faz nada.
 
-### Build incremental e `CLEAN=1`
+### Build limpo (padrão) e `SKIP_CLEAN=1`
 
-Por padrão o build é **incremental** (`mvn install` do módulo e dos módulos de
-que ele depende) — bem mais rápido no dia a dia. Ao renomear/remover classes ou
-mudar contratos entre módulos, force a recompilação do zero:
+Por padrão o build é **limpo**: `mvn clean install` do módulo e dos módulos de
+que ele depende (`-pl <modulo> -am clean install -DskipTests`). Assim renomear
+ou remover classes/contratos nunca deixa artefato velho em `target/`.
+
+Se você só mexeu no corpo de métodos e quer o build incremental (bem mais
+rápido), pule o `clean`:
 
 ```bash
-CLEAN=1 ./pequizero.sh
+SKIP_CLEAN=1 ./pequizero.sh
 ```
 
 ### Timeout de startup
@@ -170,6 +232,7 @@ só a linha do `services.conf` — nenhum arquivo do projeto é tocado.
 | Arquivo | O que guarda | Versionado? |
 |---|---|---|
 | `services.conf` | A definição dos serviços (uma linha por serviço) | sim (começa vazio) |
+| `groups.conf` | Os grupos de APIs (nome + seleção em ordem) — criado no 1º grupo | não (só na sua máquina) |
 | `services.local.conf` | `BASE_DIR`, `TIMEOUT_SECONDS`, histórico de workspaces e as variáveis dos `jvm_args` | não (só na sua máquina) |
 
 Prefira o menu (`[N]`/`[E]`/`[R]`), mas dá para editar o `services.conf` à mão.
@@ -183,7 +246,7 @@ nome | path | projeto | modulo | build_modules | profile | jvm_args | wait
   pelo `[N]` já preenche automaticamente.
 - **modulo** — módulo do `spring-boot:run` (relativo à raiz do projeto, ex.:
   `apps/web`). Vazio = projeto na raiz.
-- **build_modules** — módulos extras para o `mvn install`. Vazio = build do
+- **build_modules** — módulos extras para o `mvn clean install`. Vazio = build do
   módulo (com dependências) ou do projeto todo se `modulo` também for vazio.
 - **profile** — Spring profile. Vazio = nenhum.
 - **jvm_args** — argumentos JVM; pode referenciar variáveis (abaixo).
