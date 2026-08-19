@@ -547,7 +547,6 @@ scan_executable_modules() {
   local d proj p moddir mod pack
   for d in "$BASE_DIR"/*/; do
     proj="$(basename "$d")"
-    [ "$proj" = "scripts" ] && continue
     [ -f "$d/pom.xml" ] || continue
 
     while IFS= read -r p; do

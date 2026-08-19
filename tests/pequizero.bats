@@ -281,6 +281,33 @@ EOF
   [ "${#SCAN_MOD[@]}" -eq 0 ]
 }
 
+@test "scan: projeto de primeiro nível chamado 'scripts' é detectado" {
+  local ws="$BATS_TEST_TMPDIR/ws4"
+  mkdir -p "$ws/scripts"
+  printf '<project><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>\n' \
+    > "$ws/scripts/pom.xml"
+  BASE_DIR="$ws"
+  S_NAME=() S_PATH=() S_MOD=()
+  scan_executable_modules
+  [ "${#SCAN_MOD[@]}" -eq 1 ]
+  [ "${SCAN_PROJ[0]}" = "scripts" ]
+  [ "${SCAN_MOD[0]}" = "" ]
+  [ "${SCAN_PATH[0]}" = "$ws/scripts" ]
+}
+
+@test "scan: pasta de primeiro nível sem pom.xml é ignorada" {
+  local ws="$BATS_TEST_TMPDIR/ws5"
+  mkdir -p "$ws/scripts" "$ws/proj"
+  printf 'nao sou maven\n' > "$ws/scripts/algum-script.sh"
+  printf '<project><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>\n' \
+    > "$ws/proj/pom.xml"
+  BASE_DIR="$ws"
+  S_NAME=() S_PATH=() S_MOD=()
+  scan_executable_modules
+  [ "${#SCAN_MOD[@]}" -eq 1 ]
+  [ "${SCAN_PROJ[0]}" = "proj" ]
+}
+
 # --- registro em lote ([A] do menu [N]) -------------------------------------
 
 @test "unique_service_name: mantém o nome quando está livre" {

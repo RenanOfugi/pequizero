@@ -148,6 +148,20 @@ scan_executable_modules
 check "cadastrado via symlink não reaparece"    '[ "${#SCAN_MOD[@]}" -eq 0 ]'
 rm -f "$WS/proj-link"
 
+echo "scan_executable_modules (pasta 'scripts' no primeiro nível)"
+WS2="$TMP/ws-scripts"
+mkdir -p "$WS2/scripts" "$WS2/sem-pom"
+printf '<project><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>\n' \
+  > "$WS2/scripts/pom.xml"
+printf 'nao sou maven\n' > "$WS2/sem-pom/algum-script.sh"
+BASE_DIR="$WS2"
+S_NAME=() S_PATH=() S_MOD=()
+scan_executable_modules
+check "projeto maven chamado 'scripts' é detectado" \
+  '[ "${#SCAN_MOD[@]}" -eq 1 ] && [ "${SCAN_PROJ[0]:-}" = "scripts" ] && [ -z "${SCAN_MOD[0]}" ]'
+check "pasta sem pom.xml é ignorada"    '[ "${SCAN_PATH[0]:-}" = "$WS2/scripts" ]'
+BASE_DIR="$WS"
+
 echo "registro em lote ([A] do menu [N])"
 S_NAME=(web)
 check "nome livre é mantido"            '[ "$(S_NAME=(outro); unique_service_name web proj)" = "web" ]'
