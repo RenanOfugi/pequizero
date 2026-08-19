@@ -47,6 +47,7 @@ Um único script Bash, sem dependências além de `tmux`, `maven` e `java`.
 - [Instalação](#instalação)
 - [Atualizar](#atualizar)
 - [Desinstalar](#desinstalar)
+- [Levar a configuração para outra máquina](#levar-a-configuração-para-outra-máquina)
 - [Primeira execução](#primeira-execução)
 - [O menu](#o-menu)
 - [Grupos de APIs](#grupos-de-apis--g)
@@ -159,9 +160,41 @@ rm -f  ~/.local/bin/pequizero   # se você criou o symlink
 rm -rf /caminho/do/clone/pequizero
 ```
 
-Para trocar de máquina em vez de desinstalar, copie só o `services.conf` e o
-`groups.conf`. O `services.local.conf` guarda segredos e caminhos absolutos da
-máquina antiga — vale recriar do zero na nova (ele nasce na 1ª execução).
+### Levar a configuração para outra máquina
+
+O destino é o diretório de config da instalação nova — `~/.config/pequizero/`
+se você instalou pela release, ou a pasta do clone. Em caso de dúvida, o
+próprio pequizero informa o caminho nas duas máquinas:
+
+```bash
+pequizero --help | grep '^Arquivos'
+```
+
+Rode o pequizero uma vez na máquina nova (ele cria o diretório e pergunta o
+workspace) e depois copie os dois arquivos por cima:
+
+```bash
+# rodando na máquina nova, instalada pela release
+scp maquina-antiga:~/.config/pequizero/services.conf ~/.config/pequizero/
+scp maquina-antiga:~/.config/pequizero/groups.conf   ~/.config/pequizero/
+```
+
+**Copie só esses dois.** O `services.local.conf` guarda segredos e o `BASE_DIR`
+da máquina antiga — deixe o novo nascer na 1ª execução e recadastre os segredos
+lá.
+
+E note que o `services.conf` **não é totalmente portátil**: o 2º campo de cada
+linha é o caminho absoluto do projeto na máquina antiga. Se seus projetos ficam
+em outro lugar na nova, o pequizero avisa serviço por serviço ao subir
+(`diretório '...' não existe — pulando 'nome-da-api'`) em vez de falhar de
+forma obscura. Para corrigir de uma vez, troque o prefixo:
+
+```bash
+sed -i 's#|/home/antigo/projetos/#|/home/novo/dev/#' ~/.config/pequizero/services.conf
+```
+
+Ou ajuste caso a caso pelo `[E]` do menu, que expõe o campo `path`. O
+`groups.conf` guarda só nomes de serviços, então esse atravessa sem ajuste.
 
 ## Primeira execução
 
