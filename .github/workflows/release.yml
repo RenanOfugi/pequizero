@@ -1,0 +1,62 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 'warning' é o portão: info/style ficam de fora porque os asserts do
+      # runner são strings avaliadas por eval (SC2016 em massa, por construção).
+      - name: shellcheck
+        run: shellcheck --severity=warning pequizero.sh tests/run_tests.sh
+
+      - name: runner standalone
+        run: ./tests/run_tests.sh
+
+      - name: bats
+        run: |
+          sudo apt-get update && sudo apt-get install -y bats
+          bats tests/pequizero.bats
+
+      - name: versão do script confere com a tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          script="$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' pequizero.sh | head -1)"
+          [ "$tag" = "$script" ] || {
+            echo "::error::tag $GITHUB_REF_NAME != VERSION=$script no script"
+            exit 1
+          }
+
+  publish:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: extrai a seção da versão no CHANGELOG
+        run: |
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" v "\\]" { found=1; next }
+            found && /^## \[/         { exit }
+            found                      { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Ver CHANGELOG.md." > notes.md
+
+      - name: cria a release com o script anexado
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" pequizero.sh \
+            --title "pequizero $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --verify-tag

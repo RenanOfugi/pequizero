@@ -46,9 +46,14 @@ out="$(build_command 0)"
 check "injeção \$(...) NÃO executa"     '[ ! -f "$TMP/pwned" ]'
 check "\$(...) fica literal"            '[[ "$out" == *"\$(touch"* ]]'
 
-LOCAL_VARS=(TOKEN); TOKEN="segredo123"; S_JVM=('-Dt=$TOKEN'); S_NAME=(s)
+# TOKEN e fl são consumidos dentro dos asserts (avaliados por eval no 'check').
+LOCAL_VARS=(TOKEN)
+# shellcheck disable=SC2034
+TOKEN="segredo123"
+S_JVM=('-Dt=$TOKEN'); S_NAME=(s)
 out="$(build_command 0)"
 check "valor não vaza no comando"       '[[ "$out" != *"segredo123"* ]]'
+# shellcheck disable=SC2034
 fl="$(service_env_flags 0)"
 check "env flag injeta a variável"      '[[ "$fl" == *"TOKEN=segredo123"* ]]'
 
@@ -239,6 +244,41 @@ check "group_summary marca a órfã"      '[[ "$(group_summary 0 0)" == *"sumiu(
 
 echo "trim"
 check "trim apara pontas"               '[ "$(trim "  a b  ")" = "a b" ]'
+
+echo "resolve_conf_dir (onde ficam os .conf)"
+# Cada caso monta um SCRIPT_DIR falso e reexecuta a resolução.
+resolve_in() {  # $1 = SCRIPT_DIR falso, $2 = XDG_CONFIG_HOME falso
+  ( SCRIPT_DIR="$1" XDG_CONFIG_HOME="$2"
+    CONF_DIR="$SCRIPT_DIR"
+    CONF_FILE="$CONF_DIR/services.conf"
+    LOCAL_CONF="$CONF_DIR/services.local.conf"
+    GROUPS_FILE="$CONF_DIR/groups.conf"
+    resolve_conf_dir
+    echo "$CONF_DIR" )
+}
+
+mkdir -p "$TMP/clone" "$TMP/clone/.git" "$TMP/bin" "$TMP/legado" "$TMP/xdg"
+: > "$TMP/clone/README.md"
+: > "$TMP/legado/services.conf"
+
+check "clone (.git) mantém config ao lado"  '[ "$(resolve_in "$TMP/clone" "$TMP/xdg")" = "$TMP/clone" ]'
+check "instalado no PATH vai para o XDG"    '[ "$(resolve_in "$TMP/bin" "$TMP/xdg")" = "$TMP/xdg/pequizero" ]'
+check "config antiga ao lado é respeitada"  '[ "$(resolve_in "$TMP/legado" "$TMP/xdg")" = "$TMP/legado" ]'
+check "resolve_conf_dir não cria diretório" '[ ! -d "$TMP/xdg/pequizero" ]'
+
+echo "is_repo_install"
+check "detecta .git"                    '( SCRIPT_DIR="$TMP/clone"; is_repo_install )'
+check "detecta README+tests sem .git"   '( rm -rf "$TMP/clone/.git"; mkdir -p "$TMP/clone/tests"; SCRIPT_DIR="$TMP/clone"; is_repo_install )'
+check "README solto não é repositório"  '( : > "$TMP/bin/README.md"; SCRIPT_DIR="$TMP/bin"; ! is_repo_install )'
+check "não confunde diretório do PATH"  '( SCRIPT_DIR="$TMP/bin"; ! is_repo_install )'
+
+echo "integridade do download (--update)"
+# O mesmo par de checagens que o self_update aplica antes de instalar.
+head -30 "$SCRIPT_DIR/pequizero.sh" > "$TMP/truncado.sh"
+check "sintaxe válida mas truncado é barrado" \
+  'bash -n "$TMP/truncado.sh" 2>/dev/null && ! grep -q "^  main \"\$@\"$" "$TMP/truncado.sh"'
+check "script completo passa nas duas"  \
+  'bash -n "$SCRIPT_DIR/pequizero.sh" && grep -q "^  main \"\$@\"$" "$SCRIPT_DIR/pequizero.sh"'
 
 echo ""
 echo "Resultado: $PASS ok, $FAIL falhas."

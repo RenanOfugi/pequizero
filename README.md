@@ -45,6 +45,7 @@ Um único script Bash, sem dependências além de `tmux`, `maven` e `java`.
 
 - [Requisitos](#requisitos)
 - [Instalação](#instalação)
+- [Atualizar](#atualizar)
 - [Primeira execução](#primeira-execução)
 - [O menu](#o-menu)
 - [Grupos de APIs](#grupos-de-apis--g)
@@ -65,10 +66,38 @@ Um único script Bash, sem dependências além de `tmux`, `maven` e `java`.
 | `tmux` | uma janela por serviço |
 | `maven` (`mvn`) | build e `spring-boot:run` |
 | `java` | o JDK que seus projetos exigem |
+| `curl` | opcional — só para instalar/atualizar pela release |
 
 O script verifica tudo na inicialização e avisa o que estiver faltando.
 
 ## Instalação
+
+O pequizero é um único script. Baixe a última release para um diretório do seu
+`PATH`:
+
+```bash
+mkdir -p ~/.local/bin
+curl -fsSL https://github.com/RenanOfugi/pequizero/releases/latest/download/pequizero.sh \
+  -o ~/.local/bin/pequizero && chmod +x ~/.local/bin/pequizero
+pequizero
+```
+
+Nesse modo a configuração fica em `~/.config/pequizero/`
+(ou `$XDG_CONFIG_HOME/pequizero`), separada do executável.
+
+### Atualizar
+
+O mesmo comando acima atualiza — ou, mais curto:
+
+```bash
+pequizero --update
+```
+
+Ele valida o download antes de instalar e **não toca na sua configuração**. Se
+uma versão mudar o formato de algum `.conf`, a migração é automática na primeira
+execução, com aviso no terminal.
+
+### Instalação via clone (para desenvolver)
 
 ```bash
 git clone https://github.com/RenanOfugi/pequizero.git
@@ -76,8 +105,12 @@ cd pequizero
 ./pequizero.sh
 ```
 
-Opcionalmente, coloque no `PATH`. O script resolve symlinks, então os arquivos
-de configuração continuam ao lado do script real:
+Nesse modo os `.conf` ficam **ao lado do script**, não no `~/.config` — o
+pequizero detecta a árvore do repositório e respeita isso. Para atualizar, use
+`git pull` (o `--update` se recusa a sobrescrever um clone).
+
+Pode colocar no `PATH` por symlink; o script resolve symlinks, então a
+configuração continua junto do script real:
 
 ```bash
 ln -s "$PWD/pequizero.sh" ~/.local/bin/pequizero
@@ -305,14 +338,19 @@ só a linha do `services.conf` — nenhum arquivo do seu projeto é tocado.
 A configuração é **individual de cada usuário**: os três arquivos são gerados
 pela própria ferramenta, na sua máquina, com os seus projetos e caminhos. Por
 isso **nenhum deles é versionado** — todos estão no `.gitignore`, e o que você
-cadastra nunca vai para o repositório. Cada pessoa que clona o pequizero começa
-com a configuração zerada e monta a sua.
+cadastra nunca vai para o repositório. Cada pessoa começa com a configuração
+zerada e monta a sua.
 
 | Arquivo | O que guarda | Criado quando |
 |---|---|---|
 | `services.conf` | A definição dos serviços (uma linha por serviço) | 1ª execução |
 | `services.local.conf` | `BASE_DIR`, `TIMEOUT_SECONDS`, histórico de workspaces e as variáveis dos `jvm_args` | 1ª execução |
 | `groups.conf` | Os grupos (nome + seleção em ordem) | no 1º grupo criado |
+
+Onde eles ficam depende de como você instalou: **`~/.config/pequizero/`** na
+instalação por release, ou **ao lado do script** no clone. `pequizero --help`
+mostra o caminho em uso. Uma instalação antiga que já tenha `.conf` ao lado do
+executável continua usando aquele diretório — atualizar não move nada de lugar.
 
 Há um modelo comentado em [`services.local.conf.example`](services.local.conf.example).
 
@@ -377,6 +415,8 @@ Uso: pequizero.sh [opções]
 |---|---|
 | _(nenhuma)_ | Abre o menu interativo |
 | `-h`, `--help` | Resumo da ajuda no terminal |
+| `-v`, `--version` | Mostra a versão instalada |
+| `--update` | Baixa a última release por cima do script (não afeta a config) |
 | `--reconfigure` | Refaz a pergunta do workspace e regrava a escolha |
 
 | Variável de ambiente | Efeito |
@@ -393,7 +433,15 @@ são carregáveis por `source` sem executar nada — o `main` só roda quando o 
 ```bash
 ./tests/run_tests.sh        # runner standalone, sem dependências
 bats tests/pequizero.bats   # suíte completa (requer bats-core)
+
+shellcheck --severity=warning pequizero.sh tests/run_tests.sh
 ```
+
+As três checagens são as mesmas que o CI roda a cada push e em cada tag `v*`
+([`.github/workflows/release.yml`](.github/workflows/release.yml)). O workflow
+também confere que a tag bate com `VERSION` no script antes de publicar a
+release, e anexa o `pequizero.sh` com as notas extraídas do
+[`CHANGELOG.md`](CHANGELOG.md).
 
 Contribuições são bem-vindas. Antes de abrir um PR:
 
@@ -401,7 +449,11 @@ Contribuições são bem-vindas. Antes de abrir um PR:
 2. adicione teste para o comportamento que você mudou;
 3. mantenha o estilo do script (`set -uo pipefail`, funções pequenas, mensagens
    pelos helpers `die`/`warn`/`info`/`success`);
-4. não versione configuração local.
+4. não versione configuração local;
+5. se mudar o formato de algum `.conf`, mantenha a leitura do formato antigo com
+   regravação automática (como `load_services` já faz com as linhas de 7
+   campos) — atualizar nunca deve exigir editar config à mão;
+6. suba `VERSION` no script e registre a mudança no `CHANGELOG.md`.
 
 ## Licença
 

@@ -6,7 +6,20 @@
 #   ./pequizero.sh        menu interativo de seleção/ordem
 #   ./pequizero.sh -h     ajuda
 #
+
+# Guarda de versão antes de qualquer sintaxe de bash 4 (declare -A, mapfile,
+# ${var,,}): sem isso, o bash 3.2 do macOS falha com 'bad substitution' solto.
+if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+  echo "pequizero: requer bash 4+ (encontrado: ${BASH_VERSION:-desconhecido})." >&2
+  echo "           macOS: 'brew install bash' e rode com o bash do Homebrew." >&2
+  exit 1
+fi
+
 set -uo pipefail
+
+VERSION="1.0.0"
+REPO="RenanOfugi/pequizero"
+RELEASE_URL="https://github.com/$REPO/releases/latest/download/pequizero.sh"
 
 SESSION="apis"
 # Timeout aguardando o startup de cada serviço; pode ser sobrescrito definindo
@@ -14,9 +27,44 @@ SESSION="apis"
 TIMEOUT_SECONDS=300
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-CONF_FILE="$SCRIPT_DIR/services.conf"
-LOCAL_CONF="$SCRIPT_DIR/services.local.conf"
-GROUPS_FILE="$SCRIPT_DIR/groups.conf"
+
+# Padrão: config ao lado do script (instalação via clone). resolve_conf_dir()
+# redireciona para o XDG quando o script foi instalado solto no PATH — chamada
+# em main(), nunca no source, para os testes não criarem diretório nenhum.
+CONF_DIR="$SCRIPT_DIR"
+CONF_FILE="$CONF_DIR/services.conf"
+LOCAL_CONF="$CONF_DIR/services.local.conf"
+GROUPS_FILE="$CONF_DIR/groups.conf"
+
+# Instalação "de repositório": o script está na própria árvore do projeto
+# (clone ou tarball extraído), não copiado solto para um diretório do PATH.
+# README.md sozinho não serve como pista — um '~/bin' qualquer pode ter um;
+# junto do 'tests/' o par só aparece na árvore do projeto.
+is_repo_install() {
+  [ -d "$SCRIPT_DIR/.git" ] \
+    || { [ -f "$SCRIPT_DIR/README.md" ] && [ -d "$SCRIPT_DIR/tests" ]; }
+}
+
+# Decide onde ficam os .conf. Mantém o diretório do script quando é clone ou
+# quando já existe config lá (instalação antiga, anterior ao XDG) — assim
+# ninguém tem a config movida embaixo dos pés ao atualizar.
+resolve_conf_dir() {
+  if [ -w "$SCRIPT_DIR" ] \
+     && { is_repo_install || [ -f "$CONF_FILE" ] || [ -f "$LOCAL_CONF" ]; }; then
+    return 0
+  fi
+
+  CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pequizero"
+  CONF_FILE="$CONF_DIR/services.conf"
+  LOCAL_CONF="$CONF_DIR/services.local.conf"
+  GROUPS_FILE="$CONF_DIR/groups.conf"
+}
+
+# Cria o CONF_DIR só quando alguém vai gravar — '--help' e '--version' não
+# devem deixar rastro no disco.
+ensure_conf_dir() {
+  [ -d "$CONF_DIR" ] || mkdir -p "$CONF_DIR" || die "falha ao criar '$CONF_DIR'."
+}
 
 # S_PATH = caminho absoluto do projeto (usado no 'cd'); S_PROJ = nome curto.
 S_NAME=() S_PATH=() S_PROJ=() S_MOD=() S_BUILD=() S_PROFILE=() S_JVM=() S_WAIT=()
@@ -81,6 +129,9 @@ Uso: $(basename "$0") [opções]
 
 Opções:
   -h, --help      Mostra esta ajuda.
+  -v, --version   Mostra a versão ($VERSION).
+  --update        Baixa a última release por cima deste script (não afeta a
+                  config). Em instalação via clone, use 'git pull'.
   --reconfigure   Refaz a pergunta do caminho da pasta e regrava a escolha.
 
 Variáveis de ambiente:
@@ -88,11 +139,14 @@ Variáveis de ambiente:
                   quando você só mexeu no corpo de métodos. Padrão:
                   'mvn clean install' (recompila do zero).
 
-Arquivos:
+Arquivos (em $CONF_DIR):
   services.conf         Definição dos serviços.
   groups.conf           Grupos de APIs (seleção + ordem fixa), opção [G].
   services.local.conf   BASE_DIR, TIMEOUT_SECONDS e variáveis dos jvm_args
                         (criado na 1ª execução).
+
+  Instalação via clone mantém os .conf ao lado do script; instalado no PATH,
+  eles vão para \$XDG_CONFIG_HOME/pequizero (padrão: ~/.config/pequizero).
 
 Grupos de APIs:
   No menu, [G] cria/edita/remove grupos: um grupo é uma seleção de APIs com
@@ -194,7 +248,13 @@ browse_dir() {
 # cancelado.
 pick_dir() {
   local suggested base i first=1 msg=""
-  suggested="$(dirname "$SCRIPT_DIR")"
+  # No clone, a pasta irmã do repositório costuma ser o workspace. Instalado no
+  # PATH, 'dirname' daria '~/.local/bin' — sugere o diretório atual em vez disso.
+  if is_repo_install; then
+    suggested="$(dirname "$SCRIPT_DIR")"
+  else
+    suggested="$PWD"
+  fi
 
   while true; do
     # Não limpa na 1ª exibição para manter o cabeçalho de quem chamou.
@@ -251,6 +311,7 @@ prompt_base_dir() { pick_dir; }
 
 write_local_conf() {
   local base="$1"
+  ensure_conf_dir
   umask 077
   cat > "$LOCAL_CONF" <<EOF || die "falha ao gravar '$LOCAL_CONF'."
 BASE_DIR="$base"
@@ -265,6 +326,7 @@ EOF
 # Cria um services.conf zerado (só cabeçalho) se ainda não existir.
 bootstrap_services_conf() {
   [ -f "$CONF_FILE" ] && return 0
+  ensure_conf_dir
   cat > "$CONF_FILE" <<'EOF' || die "falha ao criar '$CONF_FILE'."
 # =============================================================================
 # services.conf — definição dos serviços
@@ -362,6 +424,7 @@ change_workspace() {
 }
 
 load_local_conf() {
+  # shellcheck source=/dev/null
   # shellcheck source=/dev/null
   source "$LOCAL_CONF" || die "falha ao ler '$LOCAL_CONF'."
   [ -n "${BASE_DIR:-}" ] || die "BASE_DIR não definido em '$LOCAL_CONF'."
@@ -542,7 +605,7 @@ scan_executable_modules() {
   for i in "${!S_NAME[@]}"; do
     configured["$(service_key "${S_PATH[$i]}" "${S_MOD[$i]}")"]=1
   done
-  declare -A seen=()
+  declare -A seen_keys=()
 
   local d proj p moddir mod pack
   for d in "$BASE_DIR"/*/; do
@@ -564,8 +627,8 @@ scan_executable_modules() {
       local projpath="${d%/}" key
       key="$(service_key "$projpath" "$mod")"
       [ -n "${configured["$key"]:-}" ] && continue
-      [ -n "${seen["$key"]:-}" ] && continue
-      seen["$key"]=1
+      [ -n "${seen_keys["$key"]:-}" ] && continue
+      seen_keys["$key"]=1
       SCAN_PATH+=("$projpath"); SCAN_PROJ+=("$proj"); SCAN_MOD+=("$mod")
     done < <(find "$d" -maxdepth 4 \
                \( -name target -o -name src -o -name node_modules -o -name '.*' \) -prune \
@@ -1080,6 +1143,7 @@ load_groups() {
 }
 
 save_groups() {
+  ensure_conf_dir
   local tmp="$GROUPS_FILE.tmp.$$" i
   {
     groups_header
@@ -1450,10 +1514,81 @@ print_menu() {
   echo ""
 }
 
+# Temporário do --update, em escopo global: a trap EXIT roda depois de
+# self_update() retornar, quando um 'local' já não existiria mais (e 'set -u'
+# transformaria a limpeza em erro).
+SELF_UPDATE_TMP=""
+cleanup_self_update() {
+  [ -n "$SELF_UPDATE_TMP" ] && rm -f "$SELF_UPDATE_TMP"
+  return 0
+}
+
+# Baixa a última release por cima do próprio script (--update).
+# Não mexe nos .conf: eles vivem no CONF_DIR, fora do caminho do binário.
+self_update() {
+  local target target_dir
+  target="$(readlink -f "${BASH_SOURCE[0]}")"
+  target_dir="$(dirname "$target")"
+
+  if is_repo_install; then
+    die "instalação via repositório — atualize com: git -C \"$SCRIPT_DIR\" pull"
+  fi
+  if [ ! -w "$target" ] || [ ! -w "$target_dir" ]; then
+    die "'$target' não é gravável — atualize pelo gerenciador de pacotes."
+  fi
+  command -v curl >/dev/null 2>&1 || die "curl não encontrado — necessário para --update."
+
+  # Temporário no MESMO diretório do alvo: assim o 'mv' final é um rename no
+  # mesmo filesystem (atômico), sem cópia parcial se algo falhar no meio.
+  local tmp
+  tmp="$(mktemp "$target_dir/.pequizero.XXXXXX")" \
+    || die "falha ao criar arquivo temporário em '$target_dir'."
+  SELF_UPDATE_TMP="$tmp"
+  trap cleanup_self_update EXIT
+
+  info "baixando a última release de $REPO..."
+  curl -fsSL "$RELEASE_URL" -o "$tmp" || die "download falhou — nada foi alterado."
+
+  # Um download truncado que já foi movido para o PATH deixa o usuário sem
+  # ferramenta e sem diagnóstico: valida a sintaxe antes de instalar.
+  bash -n "$tmp" 2>/dev/null \
+    || die "download corrompido (sintaxe inválida) — nada foi alterado."
+
+  # 'bash -n' só pega truncagem que quebra a sintaxe; um corte em ponto
+  # sintaticamente válido passaria. Confirma que o arquivo chegou até o fim.
+  grep -q '^  main "\$@"$' "$tmp" \
+    || die "download incompleto (faltou o fim do script) — nada foi alterado."
+
+  local new_version
+  new_version="$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' "$tmp" | head -1)"
+  if [ -n "$new_version" ] && [ "$new_version" = "$VERSION" ]; then
+    cleanup_self_update
+    SELF_UPDATE_TMP=""
+    success "já está na versão mais recente ($VERSION)."
+    return 0
+  fi
+
+  # Preserva o modo do arquivo atual (o mktemp nasce 600).
+  chmod --reference="$target" "$tmp" 2>/dev/null || chmod +x "$tmp" \
+    || die "falha ao ajustar permissões de '$tmp'."
+
+  # 'mv' troca o inode: o bash lê o script incrementalmente enquanto executa,
+  # então sobrescrever o mesmo inode corromperia esta execução.
+  mv "$tmp" "$target" || die "falha ao substituir '$target'."
+  SELF_UPDATE_TMP=""
+
+  success "atualizado: $VERSION -> ${new_version:-desconhecida}"
+}
+
 main() {
+  resolve_conf_dir
+
   case "${1:-}" in
     -h|--help) usage; exit 0 ;;
+    -v|--version) echo "pequizero $VERSION"; exit 0 ;;
+    --update) self_update; exit 0 ;;
     --reconfigure)
+      # shellcheck source=/dev/null
       [ -f "$LOCAL_CONF" ] && source "$LOCAL_CONF"
       reconfigure_base_dir
       exit 0 ;;

@@ -580,3 +580,80 @@ EOF
   run trim "  a b  "
   [ "$output" = "a b" ]
 }
+
+# --- resolve_conf_dir / is_repo_install -----------------------------------
+
+# Reaponta a resolução para um SCRIPT_DIR falso e devolve o CONF_DIR escolhido.
+resolve_in() {
+  SCRIPT_DIR="$1"
+  XDG_CONFIG_HOME="$2"
+  CONF_DIR="$SCRIPT_DIR"
+  CONF_FILE="$CONF_DIR/services.conf"
+  LOCAL_CONF="$CONF_DIR/services.local.conf"
+  GROUPS_FILE="$CONF_DIR/groups.conf"
+  resolve_conf_dir
+  echo "$CONF_DIR"
+}
+
+@test "resolve_conf_dir: clone (.git) mantém os .conf ao lado do script" {
+  mkdir -p "$BATS_TEST_TMPDIR/clone/.git"
+  run resolve_in "$BATS_TEST_TMPDIR/clone" "$BATS_TEST_TMPDIR/xdg"
+  [ "$output" = "$BATS_TEST_TMPDIR/clone" ]
+}
+
+@test "resolve_conf_dir: instalado no PATH usa XDG_CONFIG_HOME" {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  run resolve_in "$BATS_TEST_TMPDIR/bin" "$BATS_TEST_TMPDIR/xdg"
+  [ "$output" = "$BATS_TEST_TMPDIR/xdg/pequizero" ]
+}
+
+@test "resolve_conf_dir: instalação antiga com .conf ao lado é preservada" {
+  mkdir -p "$BATS_TEST_TMPDIR/legado"
+  : > "$BATS_TEST_TMPDIR/legado/services.conf"
+  run resolve_in "$BATS_TEST_TMPDIR/legado" "$BATS_TEST_TMPDIR/xdg"
+  [ "$output" = "$BATS_TEST_TMPDIR/legado" ]
+}
+
+@test "resolve_conf_dir: não cria diretório (só ensure_conf_dir cria)" {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  resolve_in "$BATS_TEST_TMPDIR/bin" "$BATS_TEST_TMPDIR/xdg" >/dev/null
+  [ ! -d "$BATS_TEST_TMPDIR/xdg/pequizero" ]
+  ensure_conf_dir
+  [ -d "$BATS_TEST_TMPDIR/xdg/pequizero" ]
+}
+
+@test "is_repo_install: .git, ou README.md + tests/, indicam árvore do projeto" {
+  mkdir -p "$BATS_TEST_TMPDIR/a/.git" "$BATS_TEST_TMPDIR/b/tests" \
+           "$BATS_TEST_TMPDIR/c" "$BATS_TEST_TMPDIR/d"
+  : > "$BATS_TEST_TMPDIR/b/README.md"
+  : > "$BATS_TEST_TMPDIR/d/README.md"            # README solto, sem tests/
+  SCRIPT_DIR="$BATS_TEST_TMPDIR/a"; is_repo_install
+  SCRIPT_DIR="$BATS_TEST_TMPDIR/b"; is_repo_install
+  SCRIPT_DIR="$BATS_TEST_TMPDIR/c"; ! is_repo_install
+  SCRIPT_DIR="$BATS_TEST_TMPDIR/d"; ! is_repo_install
+}
+
+# --- integridade do download (--update) -----------------------------------
+
+@test "--update: truncagem sintaticamente válida é detectada pelo fim do script" {
+  head -30 "$SCRIPT" > "$BATS_TEST_TMPDIR/truncado.sh"
+  bash -n "$BATS_TEST_TMPDIR/truncado.sh"                            # passa no -n
+  ! grep -q '^  main "\$@"$' "$BATS_TEST_TMPDIR/truncado.sh"          # mas é barrado aqui
+}
+
+@test "--update: o script completo passa nas duas checagens" {
+  bash -n "$SCRIPT"
+  grep -q '^  main "\$@"$' "$SCRIPT"
+}
+
+@test "--version imprime a versão do script" {
+  run bash "$SCRIPT" --version
+  [ "$status" -eq 0 ]
+  [[ "$output" == "pequizero $VERSION" ]]
+}
+
+@test "--update recusa sobrescrever instalação via repositório" {
+  run bash "$SCRIPT" --update
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"git -C"* ]]
+}
