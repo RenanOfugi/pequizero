@@ -272,6 +272,34 @@ check "detecta README+tests sem .git"   '( rm -rf "$TMP/clone/.git"; mkdir -p "$
 check "README solto não é repositório"  '( : > "$TMP/bin/README.md"; SCRIPT_DIR="$TMP/bin"; ! is_repo_install )'
 check "não confunde diretório do PATH"  '( SCRIPT_DIR="$TMP/bin"; ! is_repo_install )'
 
+echo "tmux_version_code (piso do -e por versão)"
+vcode() { eval "tmux() { echo \"$1\"; }"; tmux_version_code; }
+check "3.2a -> 302"                     '[ "$(vcode "tmux 3.2a")" = "302" ]'
+check "3.0a -> 300"                     '[ "$(vcode "tmux 3.0a")" = "300" ]'
+check "2.7 -> 207"                      '[ "$(vcode "tmux 2.7")" = "207" ]'
+check "next-3.4 -> 304"                 '[ "$(vcode "tmux next-3.4")" = "304" ]'
+check "3.10 > 3.2 (ordena numérico)"    '[ "$(vcode "tmux 3.10")" -gt "$(vcode "tmux 3.2")" ]'
+check "saída ilegível -> 0 (não bloqueia)" '[ "$(vcode "lixo")" = "0" ]'
+unset -f tmux
+
+echo "portão do tmux -e (só cobra quando o serviço injeta variáveis)"
+mkdir -p "$TMP/svc"
+S_NAME=(svc) S_PATH=("$TMP/svc") S_PROJ=(p) S_MOD=("") S_BUILD=("") S_PROFILE=("") S_WAIT=(false)
+S_JVM=('-Dtoken=$SEGREDO'); LOCAL_VARS=(SEGREDO)
+# consumida por service_env_flags via nome, não por referência direta
+# shellcheck disable=SC2034
+SEGREDO="xyz"
+gate() {  # $1 = versão do tmux, $2 = 0 se a sessão já existe
+  eval "tmux() { case \"\$1\" in -V) echo \"$1\";; has-session) return $2;; *) return 0;; esac; }"
+  start_service 0 >/dev/null 2>&1
+}
+check "3.0a + variável + sessão nova barra"   '! gate "tmux 3.0a" 1'
+check "3.0a + variável + sessão existente ok" 'gate "tmux 3.0a" 0'
+check "3.2a + variável + sessão nova ok"      'gate "tmux 3.2a" 1'
+S_JVM=("")
+check "2.7 sem variáveis passa (não usa -e)"  'gate "tmux 2.7" 1'
+unset -f tmux gate
+
 echo "integridade do download (--update)"
 # O mesmo par de checagens que o self_update aplica antes de instalar.
 head -30 "$SCRIPT_DIR/pequizero.sh" > "$TMP/truncado.sh"

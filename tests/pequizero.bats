@@ -633,6 +633,62 @@ resolve_in() {
   SCRIPT_DIR="$BATS_TEST_TMPDIR/d"; ! is_repo_install
 }
 
+# --- tmux_version_code ----------------------------------------------------
+
+@test "tmux_version_code: sufixo de letra e prefixo next- não confundem" {
+  tmux() { echo "tmux 3.2a"; }
+  [ "$(tmux_version_code)" = "302" ]
+  tmux() { echo "tmux next-3.4"; }
+  [ "$(tmux_version_code)" = "304" ]
+  tmux() { echo "tmux 2.7"; }
+  [ "$(tmux_version_code)" = "207" ]
+}
+
+@test "tmux_version_code: compara numérico (3.10 > 3.2) e degrada para 0" {
+  tmux() { echo "tmux 3.10"; }
+  local dez; dez="$(tmux_version_code)"
+  tmux() { echo "tmux 3.2"; }
+  [ "$dez" -gt "$(tmux_version_code)" ]
+  tmux() { echo "coisa estranha"; }
+  [ "$(tmux_version_code)" = "0" ]
+}
+
+# --- portão do tmux -e ----------------------------------------------------
+
+# Encena start_service com um tmux falso: só o -V e o has-session importam.
+setup_gate() {
+  mkdir -p "$BATS_TEST_TMPDIR/svc"
+  S_NAME=(svc) S_PATH=("$BATS_TEST_TMPDIR/svc") S_PROJ=(p) S_MOD=("")
+  S_BUILD=("") S_PROFILE=("") S_WAIT=(false)
+  S_JVM=('-Dtoken=$SEGREDO'); LOCAL_VARS=(SEGREDO); SEGREDO="xyz"
+}
+fake_tmux() {  # $1 = saída de 'tmux -V', $2 = status de 'has-session'
+  eval "tmux() { case \"\$1\" in -V) echo \"$1\";; has-session) return $2;; *) return 0;; esac; }"
+}
+
+@test "start_service: variável nos jvm_args + sessão nova exige tmux 3.2" {
+  setup_gate
+  fake_tmux "tmux 3.0a" 1
+  ! start_service 0 >/dev/null 2>&1
+  fake_tmux "tmux 3.2a" 1
+  start_service 0 >/dev/null 2>&1
+}
+
+@test "start_service: sessão já existente exige só tmux 3.0 (new-window -e)" {
+  setup_gate
+  fake_tmux "tmux 3.0a" 0
+  start_service 0 >/dev/null 2>&1
+  fake_tmux "tmux 2.7" 0
+  ! start_service 0 >/dev/null 2>&1
+}
+
+@test "start_service: sem variáveis o -e não entra, tmux 2.x serve" {
+  setup_gate
+  S_JVM=("")
+  fake_tmux "tmux 2.7" 1
+  start_service 0 >/dev/null 2>&1
+}
+
 # --- integridade do download (--update) -----------------------------------
 
 @test "--update: truncagem sintaticamente válida é detectada pelo fim do script" {

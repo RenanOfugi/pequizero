@@ -46,6 +46,7 @@ Um único script Bash, sem dependências além de `tmux`, `maven` e `java`.
 - [Requisitos](#requisitos)
 - [Instalação](#instalação)
 - [Atualizar](#atualizar)
+- [Desinstalar](#desinstalar)
 - [Primeira execução](#primeira-execução)
 - [O menu](#o-menu)
 - [Grupos de APIs](#grupos-de-apis--g)
@@ -62,13 +63,26 @@ Um único script Bash, sem dependências além de `tmux`, `maven` e `java`.
 
 | Dependência | Observação |
 |---|---|
-| `bash` 4+ | arrays associativos, `mapfile`, `${var,,}` |
-| `tmux` | uma janela por serviço |
+| `bash` 4.4+ | arrays associativos, `mapfile`; até 4.3, array vazio sob `set -u` aborta |
+| `tmux` | uma janela por serviço. 3.2+ só se algum serviço usar variáveis nos `jvm_args` (ver abaixo) |
 | `maven` (`mvn`) | build e `spring-boot:run` |
 | `java` | o JDK que seus projetos exigem |
 | `curl` | opcional — só para instalar/atualizar pela release |
 
 O script verifica tudo na inicialização e avisa o que estiver faltando.
+
+Roda em qualquer distro Linux com essas versões — não usa `sed -i`, `stat`,
+`date` nem `grep -P`, e o único GNU-ismo restante (`chmod --reference`, no
+`--update`) tem alternativa embutida. Em Alpine/BusyBox funciona depois de
+`apk add bash tmux maven openjdk`.
+
+**Sobre a versão do tmux:** o flag `-e`, que injeta as variáveis dos `jvm_args`
+no ambiente da janela, chegou ao `new-window` no tmux 3.0 e ao `new-session`
+só no 3.2. Sem variáveis nos `jvm_args` o flag nunca é usado e tmux 2.x serve.
+Com variáveis, o pequizero confere a versão e avisa qual serviço não pode subir
+— em vez de deixar o tmux falhar com "unknown option". Distros que ainda
+entregam tmux abaixo de 3.2 incluem Ubuntu 20.04, Debian 11 e RHEL 8; confira
+com `tmux -V`.
 
 ## Instalação
 
@@ -115,6 +129,39 @@ configuração continua junto do script real:
 ```bash
 ln -s "$PWD/pequizero.sh" ~/.local/bin/pequizero
 ```
+
+## Desinstalar
+
+O pequizero não instala serviço, não escreve em `/etc`, não mexe nos seus
+`.bashrc`/`.zshrc` e nunca grava nada dentro dos projetos que ele sobe. Tudo
+que existe é o script e o diretório de configuração — remover os dois é a
+desinstalação completa.
+
+Antes, se houver serviços rodando, derrube a sessão tmux:
+
+```bash
+tmux kill-session -t apis
+```
+
+**Instalação por release** (`pequizero --help` mostra o diretório de config em
+uso, caso você use `XDG_CONFIG_HOME`):
+
+```bash
+rm -f  ~/.local/bin/pequizero
+rm -rf ~/.config/pequizero      # apaga serviços, grupos e segredos cadastrados
+```
+
+**Instalação via clone** — a configuração vive dentro do repositório, então
+apagar a pasta leva tudo:
+
+```bash
+rm -f  ~/.local/bin/pequizero   # se você criou o symlink
+rm -rf /caminho/do/clone/pequizero
+```
+
+Para trocar de máquina em vez de desinstalar, copie só o `services.conf` e o
+`groups.conf`. O `services.local.conf` guarda segredos e caminhos absolutos da
+máquina antiga — vale recriar do zero na nova (ele nasce na 1ª execução).
 
 ## Primeira execução
 

@@ -9,8 +9,13 @@
 
 # Guarda de versão antes de qualquer sintaxe de bash 4 (declare -A, mapfile,
 # ${var,,}): sem isso, o bash 3.2 do macOS falha com 'bad substitution' solto.
-if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
-  echo "pequizero: requer bash 4+ (encontrado: ${BASH_VERSION:-desconhecido})." >&2
+# O piso é 4.4, não 4.0: até 4.3, expandir array VAZIO com "${arr[@]}" sob
+# 'set -u' aborta o script — e é o que acontece em toda janela tmux de serviço
+# sem variáveis nos jvm_args.
+if [ -z "${BASH_VERSINFO:-}" ] \
+   || [ "${BASH_VERSINFO[0]}" -lt 4 ] \
+   || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -lt 4 ]; }; then
+  echo "pequizero: requer bash 4.4+ (encontrado: ${BASH_VERSION:-desconhecido})." >&2
   echo "           macOS: 'brew install bash' e rode com o bash do Homebrew." >&2
   exit 1
 fi
@@ -203,11 +208,17 @@ remember_workspace() {
 browse_dir() {
   local cur="${1:-$PWD}"
   cur="$(cd "$cur" 2>/dev/null && pwd)" || cur="$HOME"
-  local subs sel i msg=""
+  local subs sel i d msg=""
   while true; do
+    # Glob em vez de 'find -printf': o -printf é extensão GNU (busybox e toybox
+    # não têm) e falhava calado, deixando o navegador vazio no Alpine. O glob
+    # já vem ordenado e ignora oculto sem precisar de filtro.
     subs=()
-    while IFS= read -r d; do subs+=("$d"); done \
-      < <(find "$cur" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%f\n' 2>/dev/null | sort)
+    for d in "$cur"/*/; do
+      [ -d "$d" ] || continue          # glob sem correspondência
+      d="${d%/}"
+      subs+=("${d##*/}")
+    done
 
     clear_screen_err
     {
@@ -500,6 +511,19 @@ load_services() {
   fi
 }
 
+# Versão do tmux como número comparável: '3.2a' -> 302, 'next-3.4' -> 304,
+# '1.8' -> 108. Devolve 0 quando não consegue determinar (não bloqueia nada).
+tmux_version_code() {
+  local v maj min
+  v="$(tmux -V 2>/dev/null)" || { echo 0; return 0; }
+  v="${v##* }"        # 'tmux 3.2a' -> '3.2a'
+  v="${v#next-}"      # 'next-3.4'  -> '3.4'
+  maj="${v%%.*}"; maj="${maj//[^0-9]/}"
+  min="${v#*.}";  min="${min//[^0-9]/}"
+  if [ -z "$maj" ] || [ -z "$min" ]; then echo 0; return 0; fi
+  echo $(( maj * 100 + min ))
+}
+
 # Monta o comando (install + run) de um serviço pelo índice.
 build_command() {
   local i="$1"
@@ -680,7 +704,26 @@ start_service() {
   local env_flags=()
   mapfile -t env_flags < <(service_env_flags "$i")
 
-  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+  local new_session=0
+  tmux has-session -t "$SESSION" 2>/dev/null || new_session=1
+
+  # O '-e' (variáveis no ambiente da janela) chegou ao tmux em versões
+  # diferentes: new-window em 3.0, new-session só em 3.2. Sem variáveis nos
+  # jvm_args o flag nem aparece, e tmux 2.x serve — então só cobra quando
+  # este serviço realmente injeta algo.
+  if [ "${#env_flags[@]}" -gt 0 ]; then
+    local need=300 need_label="3.0" vcode
+    if [ "$new_session" -eq 1 ]; then need=302; need_label="3.2"; fi
+    vcode="$(tmux_version_code)"
+    # vcode=0 é 'não sei dizer' (fork exótico): não bloqueia, deixa o tmux falar.
+    if [ "$vcode" -gt 0 ] && [ "$vcode" -lt "$need" ]; then
+      warn "'$name' injeta variáveis dos jvm_args e isso exige tmux $need_label+ (você tem $(tmux -V 2>/dev/null || echo '?'))."
+      warn "  opções: atualizar o tmux, ou tirar as variáveis do jvm_args deste serviço."
+      return 1
+    fi
+  fi
+
+  if [ "$new_session" -eq 1 ]; then
     tmux new-session -d -s "$SESSION" -n "$name" "${env_flags[@]}" \
       || die "falha ao criar a sessão tmux '$SESSION'."
   else
