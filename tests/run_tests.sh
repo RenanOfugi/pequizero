@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Runner de testes standalone — NÃO requer bats. Usa as mesmas funções do
-# pequizero.sh (sourced). Para a suíte completa/CI, prefira bats:
+# pqz (sourced). Para a suíte completa/CI, prefira bats:
 #   bats tests/pequizero.bats
 #
 # Uso: ./tests/run_tests.sh
@@ -9,7 +9,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$SCRIPT_DIR/pequizero.sh"
+source "$SCRIPT_DIR/pqz"
 
 PASS=0 FAIL=0
 ok()   { echo "  ok   - $1"; PASS=$((PASS+1)); }
@@ -302,11 +302,11 @@ unset -f tmux gate
 
 echo "integridade do download (--update)"
 # O mesmo par de checagens que o self_update aplica antes de instalar.
-head -30 "$SCRIPT_DIR/pequizero.sh" > "$TMP/truncado.sh"
+head -30 "$SCRIPT_DIR/pqz" > "$TMP/truncado.sh"
 check "sintaxe válida mas truncado é barrado" \
   'bash -n "$TMP/truncado.sh" 2>/dev/null && ! grep -q "^  main \"\$@\"$" "$TMP/truncado.sh"'
 check "script completo passa nas duas"  \
-  'bash -n "$SCRIPT_DIR/pequizero.sh" && grep -q "^  main \"\$@\"$" "$SCRIPT_DIR/pequizero.sh"'
+  'bash -n "$SCRIPT_DIR/pqz" && grep -q "^  main \"\$@\"$" "$SCRIPT_DIR/pqz"'
 
 echo ""
 echo "Resultado: $PASS ok, $FAIL falhas."

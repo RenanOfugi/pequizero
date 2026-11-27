@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# pequizero.sh — sobe projetos/módulos Spring Boot (Maven) em uma sessão tmux.
+# pqz — sobe projetos/módulos Spring Boot (Maven) em uma sessão tmux.
 #
 # Uso:
-#   ./pequizero.sh        menu interativo de seleção/ordem
-#   ./pequizero.sh -h     ajuda
+#   ./pqz        menu interativo de seleção/ordem
+#   ./pqz -h     ajuda
 #
 
 # Guarda de versão antes de qualquer sintaxe de bash 4 (declare -A, mapfile,
@@ -22,9 +22,9 @@ fi
 
 set -uo pipefail
 
-VERSION="1.0.0"
+VERSION="1.0.1"
 REPO="RenanOfugi/pequizero"
-RELEASE_URL="https://github.com/$REPO/releases/latest/download/pequizero.sh"
+RELEASE_URL="https://github.com/$REPO/releases/latest/download/pqz"
 
 SESSION="apis"
 # Timeout aguardando o startup de cada serviço; pode ser sobrescrito definindo
@@ -1584,7 +1584,7 @@ self_update() {
   # Temporário no MESMO diretório do alvo: assim o 'mv' final é um rename no
   # mesmo filesystem (atômico), sem cópia parcial se algo falhar no meio.
   local tmp
-  tmp="$(mktemp "$target_dir/.pequizero.XXXXXX")" \
+  tmp="$(mktemp "$target_dir/.pqz.XXXXXX")" \
     || die "falha ao criar arquivo temporário em '$target_dir'."
   SELF_UPDATE_TMP="$tmp"
   trap cleanup_self_update EXIT

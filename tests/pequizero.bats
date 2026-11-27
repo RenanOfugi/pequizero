@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Testes do pequizero.sh. Requer bats-core (https://github.com/bats-core/bats-core).
+# Testes do pqz. Requer bats-core (https://github.com/bats-core/bats-core).
 #   Instalar:  sudo apt install bats   (ou)  brew install bats-core
 #   Rodar:     bats tests/pequizero.bats
 #
@@ -9,7 +9,7 @@
 # chamados aqui — testamos apenas as funções puras (parsing, montagem, validação).
 
 setup() {
-  SCRIPT="${BATS_TEST_DIRNAME}/../pequizero.sh"
+  SCRIPT="${BATS_TEST_DIRNAME}/../pqz"
   source "$SCRIPT"
   BASE_DIR="$BATS_TEST_TMPDIR"
   LOCAL_VARS=()

@@ -4,6 +4,14 @@ Todas as mudanças relevantes deste projeto. O formato segue
 [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), e as versões
 seguem [SemVer](https://semver.org/lang/pt-BR/).
 
+## [1.0.1]
+
+### Alterado
+
+- **Comando e script principal renomeados para `pqz`**: substitui
+  `pequizero.sh` / `pequizero` por `pqz` (e `./pqz` em instalações via clone),
+  atualizando também o artefato de release, `--update`, testes e documentação.
+
 ## [1.0.0]
 
 Primeira release publicada — dá para instalar e atualizar sem clonar o

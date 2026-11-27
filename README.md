@@ -92,9 +92,9 @@ O pequizero é um único script. Baixe a última release para um diretório do s
 
 ```bash
 mkdir -p ~/.local/bin
-curl -fsSL https://github.com/RenanOfugi/pequizero/releases/latest/download/pequizero.sh \
-  -o ~/.local/bin/pequizero && chmod +x ~/.local/bin/pequizero
-pequizero
+curl -fsSL https://github.com/RenanOfugi/pequizero/releases/latest/download/pqz \
+  -o ~/.local/bin/pqz && chmod +x ~/.local/bin/pqz
+pqz
 ```
 
 Nesse modo a configuração fica em `~/.config/pequizero/`
@@ -105,7 +105,7 @@ Nesse modo a configuração fica em `~/.config/pequizero/`
 O mesmo comando acima atualiza — ou, mais curto:
 
 ```bash
-pequizero --update
+pqz --update
 ```
 
 Ele valida o download antes de instalar e **não toca na sua configuração**. Se
@@ -117,7 +117,7 @@ execução, com aviso no terminal.
 ```bash
 git clone https://github.com/RenanOfugi/pequizero.git
 cd pequizero
-./pequizero.sh
+./pqz
 ```
 
 Nesse modo os `.conf` ficam **ao lado do script**, não no `~/.config` — o
@@ -128,7 +128,7 @@ Pode colocar no `PATH` por symlink; o script resolve symlinks, então a
 configuração continua junto do script real:
 
 ```bash
-ln -s "$PWD/pequizero.sh" ~/.local/bin/pequizero
+ln -s "$PWD/pqz" ~/.local/bin/pqz
 ```
 
 ## Desinstalar
@@ -144,11 +144,11 @@ Antes, se houver serviços rodando, derrube a sessão tmux:
 tmux kill-session -t apis
 ```
 
-**Instalação por release** (`pequizero --help` mostra o diretório de config em
+**Instalação por release** (`pqz --help` mostra o diretório de config em
 uso, caso você use `XDG_CONFIG_HOME`):
 
 ```bash
-rm -f  ~/.local/bin/pequizero
+rm -f  ~/.local/bin/pqz
 rm -rf ~/.config/pequizero      # apaga serviços, grupos e segredos cadastrados
 ```
 
@@ -156,7 +156,7 @@ rm -rf ~/.config/pequizero      # apaga serviços, grupos e segredos cadastrados
 apagar a pasta leva tudo:
 
 ```bash
-rm -f  ~/.local/bin/pequizero   # se você criou o symlink
+rm -f  ~/.local/bin/pqz         # se você criou o symlink
 rm -rf /caminho/do/clone/pequizero
 ```
 
@@ -167,7 +167,7 @@ se você instalou pela release, ou a pasta do clone. Em caso de dúvida, o
 próprio pequizero informa o caminho nas duas máquinas:
 
 ```bash
-pequizero --help | grep '^Arquivos'
+pqz --help | grep '^Arquivos'
 ```
 
 Rode o pequizero uma vez na máquina nova (ele cria o diretório e pergunta o
@@ -327,7 +327,7 @@ Se você só mexeu no corpo de métodos e quer o build incremental (bem mais
 rápido), pule o `clean`:
 
 ```bash
-SKIP_CLEAN=1 ./pequizero.sh
+SKIP_CLEAN=1 ./pqz
 ```
 
 ### Timeout de startup
@@ -393,7 +393,7 @@ cada serviço terminar de inicializar antes do próximo. Para paralelizar, mude
 
 Para registrar serviços de **outra pasta**, troque o workspace com `[W]` (os
 serviços já cadastrados são preservados) e use o `[N]` de novo. Pela linha de
-comando, o equivalente ao `[W]` é `./pequizero.sh --reconfigure`.
+comando, o equivalente ao `[W]` é `./pqz --reconfigure`.
 
 ## Editar um serviço — `[E]`
 
@@ -428,7 +428,7 @@ zerada e monta a sua.
 | `groups.conf` | Os grupos (nome + seleção em ordem) | no 1º grupo criado |
 
 Onde eles ficam depende de como você instalou: **`~/.config/pequizero/`** na
-instalação por release, ou **ao lado do script** no clone. `pequizero --help`
+instalação por release, ou **ao lado do script** no clone. `pqz --help`
 mostra o caminho em uso. Uma instalação antiga que já tenha `.conf` ao lado do
 executável continua usando aquele diretório — atualizar não move nada de lugar.
 
@@ -488,7 +488,7 @@ avisa na inicialização (ela expandiria para vazio).
 ## Referência de CLI
 
 ```
-Uso: pequizero.sh [opções]
+Uso: pqz [opções]
 ```
 
 | Opção | Efeito |
@@ -506,7 +506,7 @@ Uso: pequizero.sh [opções]
 
 ## Desenvolvimento
 
-O projeto é um único script Bash (`pequizero.sh`) com suíte de testes. As funções
+O projeto é um único script Bash (`pqz`) com suíte de testes. As funções
 são carregáveis por `source` sem executar nada — o `main` só roda quando o script
 é invocado diretamente.
 
@@ -514,13 +514,13 @@ são carregáveis por `source` sem executar nada — o `main` só roda quando o 
 ./tests/run_tests.sh        # runner standalone, sem dependências
 bats tests/pequizero.bats   # suíte completa (requer bats-core)
 
-shellcheck --severity=warning pequizero.sh tests/run_tests.sh
+shellcheck --severity=warning pqz tests/run_tests.sh
 ```
 
 As três checagens são as mesmas que o CI roda a cada push e em cada tag `v*`
 ([`.github/workflows/release.yml`](.github/workflows/release.yml)). O workflow
 também confere que a tag bate com `VERSION` no script antes de publicar a
-release, e anexa o `pequizero.sh` com as notas extraídas do
+release, e anexa o `pqz` com as notas extraídas do
 [`CHANGELOG.md`](CHANGELOG.md).
 
 Contribuições são bem-vindas. Antes de abrir um PR:
